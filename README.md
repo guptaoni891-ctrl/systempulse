@@ -1,6 +1,7 @@
 # SystemPulse
 
 A Linux system monitor built with Python. It provides a polished terminal dashboard, process inspection, network measurements, temperature monitoring, optional NVIDIA GPU support, configurable thresholds, CSV history, tests, packaging, and CI.
+![SystemPulse dashboard](docs/dashboard.png)
 
 ## Why this project is portfolio-worthy
 
