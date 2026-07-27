@@ -1,0 +1,33 @@
+{
+  "thresholds": {
+    "cpu_warning": 60,
+    "cpu_critical": 80,
+    "memory_warning": 75,
+    "memory_critical": 90,
+    "disk_warning": 80,
+    "disk_critical": 90,
+    "temperature_warning": 70,
+    "temperature_critical": 85,
+    "gpu_warning": 75,
+    "gpu_critical": 90
+  },
+  "monitor": {
+    "refresh_interval": 2.0,
+    "cpu_sample_interval": 0.2
+  },
+  "logging": {
+    "csv_path": "system_log.csv"
+  },
+  "processes": {
+    "limit": 5,
+    "sample_interval": 1.0
+  },
+  "temperature": {
+    "preferred_sensors": [
+      "k10temp",
+      "coretemp",
+      "zenpower",
+      "cpu_thermal"
+    ]
+  }
+}
