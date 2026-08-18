@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "systempulse"
-version = "1.0.0"
-description = "A Linux system monitor with CPU, memory, disk, network, temperature, process, NVIDIA GPU, and CSV logging support."
+version = "1.1.0"
+description = "A cross-platform terminal system monitor for CPU, memory, disk, network, processes, temperature sensors, NVIDIA GPU metrics, and CSV logging."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

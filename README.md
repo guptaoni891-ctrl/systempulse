@@ -1,6 +1,6 @@
 # SystemPulse
 
-A modular Linux system monitor built with Python. SystemPulse provides a polished terminal dashboard for monitoring CPU, memory, disk, network, temperature, running processes, and optional NVIDIA GPU metrics.
+A modular cross-platform terminal system monitor built with Python. SystemPulse provides a polished Rich dashboard for monitoring CPU, memory, disk, network, running processes, optional CPU temperature sensors, and optional NVIDIA GPU metrics on Windows, macOS, and Linux.
 
 ![SystemPulse live dashboard](docs/dashboard.png)
 
@@ -8,18 +8,27 @@ A modular Linux system monitor built with Python. SystemPulse provides a polishe
 
 - Real-time CPU usage
 - RAM usage and capacity
-- Disk usage and capacity
-- Linux CPU temperature monitoring
+- System-disk usage and capacity
+- CPU temperature when exposed by the operating system and `psutil`
 - Network upload and download speed
 - Total network traffic since boot
 - Top CPU-consuming processes
-- NVIDIA GPU usage, temperature, VRAM, and power
+- NVIDIA GPU usage, temperature, VRAM, and power through `nvidia-smi`
 - Live terminal dashboard powered by Rich
 - CSV history logging
 - Configurable warning and critical thresholds
-- Graceful fallbacks when sensors or `nvidia-smi` are unavailable
-- Automated tests and linting
-- GitHub Actions continuous integration
+- Graceful fallbacks when temperature sensors or `nvidia-smi` are unavailable
+- Automated tests and linting on Windows, macOS, and Linux
+
+## Platform Support
+
+| Platform | Core metrics | CPU temperature | NVIDIA GPU |
+|---|---|---|---|
+| Windows 10/11 | Yes | Shown when available; otherwise `Unavailable` | Yes, when `nvidia-smi` is installed |
+| macOS | Yes | Shown when available; otherwise `Unavailable` | Usually unavailable on modern Macs |
+| Linux | Yes | Yes when supported sensors are exposed | Yes, when `nvidia-smi` is installed |
+
+Core monitoring—CPU, RAM, disk, network, processes, logging, and the terminal UI—works without temperature or NVIDIA support.
 
 ## Tech Stack
 
@@ -30,7 +39,7 @@ A modular Linux system monitor built with Python. SystemPulse provides a polishe
 - pytest
 - Ruff
 - GitHub Actions
-- `nvidia-smi`
+- `nvidia-smi` (optional)
 
 ## Installation
 
@@ -41,16 +50,20 @@ git clone https://github.com/guptaoni891-ctrl/systempulse.git
 cd systempulse
 ```
 
-Create and activate a virtual environment:
+### Windows PowerShell
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 ```
 
-Install SystemPulse and its development dependencies:
+### macOS / Linux
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
@@ -122,142 +135,41 @@ python -m systempulse
 
 ## Configuration
 
-Settings are stored in `config.json`.
+Settings are stored in `config.json`. Users can configure CPU, RAM, disk, temperature, and GPU thresholds; refresh and CPU sampling intervals; CSV output; process count; and preferred temperature sensor names.
 
-Users can configure:
+If the configuration file is missing or contains invalid JSON, SystemPulse continues using safe defaults.
 
-- CPU warning and critical thresholds
-- RAM warning and critical thresholds
-- Disk warning and critical thresholds
-- CPU temperature thresholds
-- GPU thresholds
-- Dashboard refresh interval
-- CPU sampling interval
-- CSV output path
-- Number of displayed processes
-- Preferred Linux temperature sensor names
+## CPU Temperature Notes
 
-If the configuration file is missing or contains invalid JSON, SystemPulse continues using safe default settings.
+Temperature sensor access is OS- and hardware-dependent. Linux commonly exposes CPU sensors through `psutil.sensors_temperatures()`. Windows and macOS may not expose a CPU temperature through `psutil`; in that case SystemPulse displays `Unavailable` and continues normally.
 
 ## CSV Logging
 
-SystemPulse can record:
+SystemPulse can record timestamp, CPU/RAM/disk usage, raw byte counts, CPU temperature when available, network totals and speeds, and NVIDIA GPU metrics when available.
 
-- Timestamp
-- CPU usage
-- RAM usage and byte counts
-- Disk usage and byte counts
-- CPU temperature
-- Network totals
-- Upload and download speeds
-- NVIDIA GPU name
-- GPU usage
-- GPU temperature
-- VRAM usage
-- GPU power draw
-
-The default output file is:
-
-```text
-system_log.csv
-```
+The default output file is `system_log.csv`.
 
 ## Tests and Code Quality
 
-Run the automated tests:
-
 ```bash
 python -m pytest
-```
-
-Run the linter:
-
-```bash
 python -m ruff check .
 ```
 
-Current test status:
-
-```text
-11 passed
-All checks passed!
-```
-
-GitHub Actions runs the tests and linting checks automatically on pushes and pull requests.
-
-## Project Structure
-
-```text
-systempulse/
-├── .github/
-│   └── workflows/
-│       └── tests.yml
-├── docs/
-│   └── dashboard.png
-├── src/
-│   └── systempulse/
-│       ├── __init__.py
-│       ├── __main__.py
-│       ├── cli.py
-│       ├── collector.py
-│       ├── config.py
-│       ├── gpu.py
-│       ├── logger.py
-│       ├── models.py
-│       ├── monitor.py
-│       ├── network.py
-│       ├── processes.py
-│       ├── status.py
-│       ├── ui.py
-│       └── utils.py
-├── tests/
-├── config.json
-├── pyproject.toml
-├── LICENSE
-└── README.md
-```
+GitHub Actions runs linting and tests on Windows, macOS, and Linux for Python 3.11 and 3.13.
 
 ## Architecture
 
-SystemPulse separates responsibilities across multiple modules:
+SystemPulse separates responsibilities across modules: `collector.py` collects system metrics, `gpu.py` handles NVIDIA integration, `network.py` measures network activity, `processes.py` inspects running processes, `logger.py` writes CSV history, `ui.py` builds the terminal interface, `config.py` loads settings, `status.py` classifies thresholds, and `cli.py` handles commands.
 
-- `collector.py` collects system metrics
-- `gpu.py` handles NVIDIA GPU integration
-- `network.py` measures network activity
-- `processes.py` inspects running processes
-- `logger.py` writes historical readings
-- `ui.py` builds the terminal interface
-- `config.py` loads and validates settings
-- `status.py` classifies warning levels
-- `cli.py` handles command-line commands
+## What Changed in 1.1.0
 
-This structure keeps the project maintainable, testable, and easier to extend.
-
-## Platform Support
-
-Linux is the primary supported platform.
-
-CPU temperature availability depends on the sensors exposed by the Linux kernel. NVIDIA GPU monitoring requires a working `nvidia-smi` command.
-
-SystemPulse continues to work without NVIDIA support by using:
-
-```bash
-systempulse --no-gpu snapshot
-```
-
-## What I Learned
-
-Building SystemPulse helped me practise:
-
-- Designing a modular Python application
-- Working with operating-system metrics
-- Parsing subprocess output
-- Creating reusable data models
-- Building command-line interfaces
-- Handling missing hardware and configuration safely
-- Writing automated tests
-- Packaging an installable Python project
-- Using GitHub Actions for continuous integration
+- Added Windows system-drive detection instead of assuming the Unix `/` filesystem root
+- Kept `/` as the correct root on macOS and Linux
+- Made missing/unsupported temperature APIs explicitly safe across platforms
+- Added cross-platform collector tests
+- Expanded GitHub Actions to Windows, macOS, and Linux
+- Updated package metadata and documentation to describe cross-platform support accurately
 
 ## License
 
