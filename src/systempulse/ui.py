@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from systempulse.config import AppConfig
 from systempulse.models import NetworkSpeed, ProcessStats, SystemSnapshot
 from systempulse.status import classify, classify_temperature
 from systempulse.utils import format_bytes, format_rate
@@ -26,10 +25,10 @@ def _status_text(label: str) -> Text:
 
 def build_snapshot_view(
     snapshot: SystemSnapshot,
-    config: dict[str, Any],
+    config: AppConfig,
     network_speed: NetworkSpeed | None = None,
 ) -> Group:
-    thresholds = config["thresholds"]
+    thresholds = config.thresholds
     table = Table(title=f"SystemPulse — {snapshot.timestamp}", expand=True)
     table.add_column("Metric", style="bold")
     table.add_column("Value")
@@ -37,18 +36,18 @@ def build_snapshot_view(
 
     cpu_status = classify(
         snapshot.cpu_usage_percent,
-        thresholds["cpu_warning"],
-        thresholds["cpu_critical"],
+        thresholds.cpu.warning,
+        thresholds.cpu.critical,
     )
     ram_status = classify(
         snapshot.ram_usage_percent,
-        thresholds["memory_warning"],
-        thresholds["memory_critical"],
+        thresholds.memory.warning,
+        thresholds.memory.critical,
     )
     disk_status = classify(
         snapshot.disk_usage_percent,
-        thresholds["disk_warning"],
-        thresholds["disk_critical"],
+        thresholds.disk.warning,
+        thresholds.disk.critical,
     )
 
     table.add_row("CPU", f"{snapshot.cpu_usage_percent:.1f}%", _status_text(cpu_status))
@@ -70,8 +69,8 @@ def build_snapshot_view(
     else:
         temperature_status = classify_temperature(
             snapshot.cpu_temperature_celsius,
-            thresholds["temperature_warning"],
-            thresholds["temperature_critical"],
+            thresholds.temperature.warning,
+            thresholds.temperature.critical,
         )
         table.add_row(
             "CPU temperature",
@@ -100,8 +99,8 @@ def build_snapshot_view(
         for gpu in snapshot.gpus:
             gpu_status = classify(
                 gpu.usage_percent,
-                thresholds["gpu_warning"],
-                thresholds["gpu_critical"],
+                thresholds.gpu.warning,
+                thresholds.gpu.critical,
             )
             gpu_table.add_row(
                 gpu.name,
@@ -117,7 +116,7 @@ def build_snapshot_view(
 
 def print_snapshot(
     snapshot: SystemSnapshot,
-    config: dict[str, Any],
+    config: AppConfig,
     network_speed: NetworkSpeed | None = None,
 ) -> None:
     console.print(build_snapshot_view(snapshot, config, network_speed))

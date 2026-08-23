@@ -113,6 +113,24 @@ Display the loaded configuration:
 
 ```bash
 systempulse show-config
+systempulse config show
+```
+
+Show the active configuration path, create a user configuration, or update a setting:
+
+```bash
+systempulse config path
+systempulse config init
+systempulse config set cpu.warning 70
+```
+
+`config init` refuses to replace an existing file. Use `systempulse config init --force`
+only when replacement is intentional.
+
+Show the installed version:
+
+```bash
+systempulse --version
 ```
 
 Run without NVIDIA GPU monitoring:
@@ -135,9 +153,33 @@ python -m systempulse
 
 ## Configuration
 
-Settings are stored in `config.json`. Users can configure CPU, RAM, disk, temperature, and GPU thresholds; refresh and CPU sampling intervals; CSV output; process count; and preferred temperature sensor names.
+SystemPulse works with built-in defaults when no configuration file exists. User configuration is
+stored in the platform-specific directory selected by `platformdirs`:
 
-If the configuration file is missing or contains invalid JSON, SystemPulse continues using safe defaults.
+| Platform | Typical configuration location |
+|---|---|
+| Windows | `%APPDATA%\SystemPulse\config.json` |
+| macOS | `~/Library/Application Support/SystemPulse/config.json` |
+| Linux | `~/.config/SystemPulse/config.json` |
+
+The exact location is available through `systempulse config path`. SystemPulse also reserves the
+corresponding platform-specific user data and state directories for future persistent data.
+
+Configuration precedence, from highest to lowest, is:
+
+1. Explicit `--config PATH`
+2. The `SYSTEMPULSE_CONFIG` environment variable
+3. A legacy `config.json` in the current working directory
+4. The platform-specific user configuration file
+5. Built-in defaults
+
+The legacy JSON schema remains supported. Users can configure CPU, RAM, disk, temperature, and GPU
+thresholds; refresh and CPU sampling intervals; CSV output; process count; and preferred temperature
+sensor names. Configuration is validated before monitoring starts, and invalid files produce a
+concise configuration error instead of a runtime `KeyError` or `TypeError`.
+
+An explicitly selected or discovered malformed file is reported as an error. A missing explicit file
+is also an error; when no file is selected or discovered, built-in defaults are used silently.
 
 ## CPU Temperature Notes
 

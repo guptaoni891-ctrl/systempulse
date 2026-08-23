@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import systempulse.monitor as monitor
+from systempulse.config import AppConfig, MonitorConfig
 from systempulse.models import NetworkSpeed
 
 
@@ -37,7 +38,7 @@ def _capture_live(monkeypatch):
 
 
 def test_live_monitor_collects_and_renders_repeated_snapshots(monkeypatch):
-    config = {"monitor": {"refresh_interval": 1.5}}
+    config = AppConfig(monitor=MonitorConfig(refresh_interval=1.5))
     snapshots = [
         SimpleNamespace(network="network 1"),
         SimpleNamespace(network="network 2"),
@@ -78,7 +79,7 @@ def test_live_monitor_collects_and_renders_repeated_snapshots(monkeypatch):
 
 
 def test_live_monitor_clamps_refresh_and_handles_keyboard_interrupt(monkeypatch):
-    config = {"monitor": {"refresh_interval": 0}}
+    config = AppConfig(monitor=MonitorConfig(refresh_interval=0.1))
     snapshot = object()
     collect = Mock(return_value=snapshot)
     sleep = Mock(side_effect=KeyboardInterrupt)

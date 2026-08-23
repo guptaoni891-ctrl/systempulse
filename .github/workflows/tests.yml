@@ -32,3 +32,7 @@ jobs:
 
       - name: Test
         run: python -m pytest
+
+      - name: Build wheel and source distribution
+        if: runner.os == 'Linux' && matrix.python-version == '3.13'
+        run: python -m build

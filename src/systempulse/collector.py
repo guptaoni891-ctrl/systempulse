@@ -4,10 +4,10 @@ import os
 import platform
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import psutil
 
+from systempulse.config import AppConfig
 from systempulse.gpu import get_gpu_stats
 from systempulse.models import NetworkStats, SystemSnapshot
 
@@ -25,7 +25,7 @@ def _get_disk_root() -> str:
     return "/"
 
 
-def _get_cpu_temperature(config: dict[str, Any]) -> float | None:
+def _get_cpu_temperature(config: AppConfig) -> float | None:
     """Return a CPU temperature when psutil exposes one on this platform."""
     try:
         sensors = psutil.sensors_temperatures()
@@ -35,7 +35,7 @@ def _get_cpu_temperature(config: dict[str, Any]) -> float | None:
     if not sensors:
         return None
 
-    preferred = config["temperature"]["preferred_sensors"]
+    preferred = config.temperature.preferred_sensors
     for sensor_name in preferred:
         readings = sensors.get(sensor_name)
         if readings:
@@ -51,11 +51,11 @@ def _get_cpu_temperature(config: dict[str, Any]) -> float | None:
 
 
 def collect_system_snapshot(
-    config: dict[str, Any],
+    config: AppConfig,
     *,
     include_gpu: bool = True,
 ) -> SystemSnapshot:
-    cpu_interval = float(config["monitor"]["cpu_sample_interval"])
+    cpu_interval = config.monitor.cpu_sample_interval
     cpu_usage = psutil.cpu_percent(interval=max(cpu_interval, 0.0))
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage(_get_disk_root())

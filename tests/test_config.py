@@ -1,123 +1,313 @@
 import json
+import os
+from pathlib import Path
 
-from systempulse.config import DEFAULT_CONFIG, load_config
+import pytest
+
+import systempulse.config as config_module
+import systempulse.paths as paths
+from systempulse.config import (
+    DEFAULT_CONFIG,
+    AppConfig,
+    ConfigError,
+    initialize_config,
+    load_config,
+    set_config_value,
+)
 
 
-def test_missing_config_uses_defaults(tmp_path):
-    config, warning = load_config(tmp_path / "missing.json")
+def _write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
+
+def test_typed_defaults_match_existing_v1_values():
+    config = AppConfig()
+
     assert config == DEFAULT_CONFIG
-    assert warning is not None
+    assert config.thresholds.cpu.warning == 60
+    assert config.thresholds.cpu.critical == 80
+    assert config.thresholds.memory.warning == 75
+    assert config.monitor.refresh_interval == 2.0
+    assert config.monitor.cpu_sample_interval == 0.2
+    assert config.logging.csv_path == "system_log.csv"
+    assert config.processes.limit == 5
+    assert config.temperature.preferred_sensors[0] == "k10temp"
 
 
-def test_partial_config_is_merged(tmp_path):
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"monitor": {"refresh_interval": 5}}), encoding="utf-8")
+def test_no_discovered_config_uses_typed_defaults(monkeypatch, tmp_path):
+    user_path = tmp_path / "user" / "config.json"
+    monkeypatch.setattr(paths, "user_config_path", lambda: user_path)
 
-    config, warning = load_config(path)
+    loaded = load_config(cwd=tmp_path, environ={})
 
-    assert warning is None
-    assert config["monitor"]["refresh_interval"] == 5
-    assert config["monitor"]["cpu_sample_interval"] == DEFAULT_CONFIG["monitor"][
-        "cpu_sample_interval"
-    ]
+    assert loaded.config == DEFAULT_CONFIG
+    assert loaded.resolution.path == user_path.resolve()
+    assert loaded.resolution.source == "defaults"
 
 
-def test_valid_explicit_config_path_is_loaded(tmp_path):
-    path = tmp_path / "named-settings.json"
-    path.write_text(
-        json.dumps(
-            {
-                "logging": {"csv_path": "custom.csv"},
-                "processes": {"limit": 12},
-            }
-        ),
-        encoding="utf-8",
+def test_missing_explicit_config_is_an_error(tmp_path):
+    path = tmp_path / "missing.json"
+
+    with pytest.raises(ConfigError, match="Configuration file not found"):
+        load_config(path)
+
+
+def test_valid_explicit_config_is_loaded_and_deep_merged(tmp_path):
+    path = _write_json(
+        tmp_path / "settings.json",
+        {
+            "thresholds": {"cpu_warning": 55},
+            "monitor": {"refresh_interval": 5},
+            "logging": {"csv_path": "custom.csv"},
+            "processes": {"limit": 12},
+        },
     )
 
-    config, warning = load_config(path)
+    loaded = load_config(path)
 
-    assert warning is None
-    assert config["logging"]["csv_path"] == "custom.csv"
-    assert config["processes"]["limit"] == 12
-    assert config["processes"]["sample_interval"] == DEFAULT_CONFIG["processes"][
-        "sample_interval"
-    ]
+    assert loaded.resolution.source == "explicit"
+    assert loaded.config.thresholds.cpu.warning == 55
+    assert loaded.config.thresholds.cpu.critical == 80
+    assert loaded.config.monitor.refresh_interval == 5
+    assert loaded.config.monitor.cpu_sample_interval == 0.2
+    assert loaded.config.logging.csv_path == "custom.csv"
+    assert loaded.config.processes.limit == 12
+    assert loaded.config.processes.sample_interval == 1.0
 
 
-def test_partial_nested_config_is_deep_merged_without_mutating_defaults(tmp_path):
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "thresholds": {"cpu_warning": 55},
-                "monitor": {"refresh_interval": 3.5},
-            }
-        ),
-        encoding="utf-8",
+def test_explicit_config_wins_over_environment_and_legacy(tmp_path):
+    explicit = _write_json(tmp_path / "explicit.json", {"processes": {"limit": 11}})
+    environment = _write_json(tmp_path / "environment.json", {"processes": {"limit": 12}})
+    _write_json(tmp_path / "config.json", {"processes": {"limit": 13}})
+
+    loaded = load_config(
+        explicit,
+        environ={paths.CONFIG_ENV_VAR: str(environment)},
+        cwd=tmp_path,
     )
 
-    config, warning = load_config(path)
-
-    assert warning is None
-    assert config["thresholds"]["cpu_warning"] == 55
-    assert config["thresholds"]["cpu_critical"] == 80
-    assert config["monitor"]["refresh_interval"] == 3.5
-    assert DEFAULT_CONFIG["thresholds"]["cpu_warning"] == 60
+    assert loaded.config.processes.limit == 11
+    assert loaded.resolution.source == "explicit"
 
 
-def test_invalid_json_uses_defaults_with_location_warning(tmp_path):
+def test_environment_config_wins_over_legacy(tmp_path):
+    environment = _write_json(tmp_path / "environment.json", {"processes": {"limit": 12}})
+    _write_json(tmp_path / "config.json", {"processes": {"limit": 13}})
+
+    loaded = load_config(
+        environ={paths.CONFIG_ENV_VAR: str(environment)},
+        cwd=tmp_path,
+    )
+
+    assert loaded.config.processes.limit == 12
+    assert loaded.resolution.source == "environment"
+
+
+def test_legacy_local_config_remains_compatible(monkeypatch, tmp_path):
+    legacy = _write_json(tmp_path / "config.json", {"processes": {"limit": 13}})
+    monkeypatch.setattr(paths, "user_config_path", lambda: tmp_path / "user.json")
+
+    loaded = load_config(environ={}, cwd=tmp_path)
+
+    assert loaded.config.processes.limit == 13
+    assert loaded.resolution.path == legacy.resolve()
+    assert loaded.resolution.source == "legacy"
+
+
+def test_user_config_is_used_after_legacy_location(monkeypatch, tmp_path):
+    user = _write_json(tmp_path / "user" / "config.json", {"processes": {"limit": 14}})
+    monkeypatch.setattr(paths, "user_config_path", lambda: user)
+
+    loaded = load_config(environ={}, cwd=tmp_path)
+
+    assert loaded.config.processes.limit == 14
+    assert loaded.resolution.source == "user"
+
+
+def test_invalid_json_reports_file_and_location(tmp_path):
     path = tmp_path / "broken.json"
     path.write_text('{"monitor": {', encoding="utf-8")
 
-    config, warning = load_config(path)
+    with pytest.raises(ConfigError) as error:
+        load_config(path)
 
-    assert config == DEFAULT_CONFIG
-    assert warning is not None
-    assert str(path) in warning
-    assert "invalid JSON" in warning
-    assert "line 1" in warning
-    assert "column" in warning
-
-
-def test_non_object_json_uses_defaults(tmp_path):
-    path = tmp_path / "list.json"
-    path.write_text("[]", encoding="utf-8")
-
-    config, warning = load_config(path)
-
-    assert config == DEFAULT_CONFIG
-    assert warning == f"{path} must contain a JSON object; defaults are active."
+    message = str(error.value)
+    assert str(path) in message
+    assert "invalid JSON" in message
+    assert "line 1" in message
+    assert "column" in message
 
 
-def test_invalid_nested_type_is_currently_accepted_without_validation(tmp_path):
-    """Document v1.1 behavior pending the future typed configuration work."""
-    path = tmp_path / "config.json"
-    path.write_text(json.dumps({"monitor": "fast"}), encoding="utf-8")
+def test_non_object_json_is_rejected(tmp_path):
+    path = _write_json(tmp_path / "list.json", [])
 
-    config, warning = load_config(path)
-
-    assert warning is None
-    assert config["monitor"] == "fast"
+    with pytest.raises(ConfigError, match="must contain a JSON object"):
+        load_config(path)
 
 
-def test_out_of_range_values_and_unknown_keys_are_currently_preserved(tmp_path):
-    """Document that v1.1 merges values but does not validate their semantics."""
-    path = tmp_path / "config.json"
-    path.write_text(
-        json.dumps(
-            {
-                "monitor": {"refresh_interval": -10},
-                "thresholds": {"cpu_warning": 95, "cpu_critical": 80},
-                "future_key": {"enabled": True},
-            }
-        ),
-        encoding="utf-8",
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"monitor": "fast"},
+        {"monitor": {"refresh_interval": "fast"}},
+        {"processes": {"limit": 2.5}},
+        {"processes": {"limit": True}},
+        {"temperature": {"preferred_sensors": "coretemp"}},
+        {"temperature": {"preferred_sensors": ["coretemp", 5]}},
+        {"logging": {"csv_path": ""}},
+    ],
+)
+def test_invalid_types_and_nested_structures_are_rejected(tmp_path, raw):
+    path = _write_json(tmp_path / "invalid.json", raw)
+
+    with pytest.raises(ConfigError, match="Invalid configuration"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("value", [-1, 101])
+def test_threshold_percentages_must_be_between_zero_and_one_hundred(tmp_path, value):
+    path = _write_json(
+        tmp_path / "invalid.json",
+        {"thresholds": {"cpu_warning": value}},
     )
 
-    config, warning = load_config(path)
+    with pytest.raises(ConfigError, match="between 0 and 100"):
+        load_config(path)
 
-    assert warning is None
-    assert config["monitor"]["refresh_interval"] == -10
-    assert config["thresholds"]["cpu_warning"] == 95
-    assert config["thresholds"]["cpu_critical"] == 80
-    assert config["future_key"] == {"enabled": True}
+
+@pytest.mark.parametrize("warning", [80, 90])
+def test_warning_threshold_must_be_lower_than_critical(tmp_path, warning):
+    path = _write_json(
+        tmp_path / "invalid.json",
+        {"thresholds": {"cpu_warning": warning, "cpu_critical": 80}},
+    )
+
+    with pytest.raises(ConfigError, match="lower than critical"):
+        load_config(path)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"monitor": {"refresh_interval": 0}},
+        {"monitor": {"refresh_interval": -1}},
+        {"monitor": {"cpu_sample_interval": -0.1}},
+        {"processes": {"limit": 0}},
+        {"processes": {"sample_interval": 0}},
+    ],
+)
+def test_invalid_intervals_and_limits_are_rejected(tmp_path, raw):
+    path = _write_json(tmp_path / "invalid.json", raw)
+
+    with pytest.raises(ConfigError, match="Invalid configuration"):
+        load_config(path)
+
+
+def test_unknown_settings_are_rejected_to_prevent_silent_typos(tmp_path):
+    path = _write_json(tmp_path / "invalid.json", {"future_key": {"enabled": True}})
+
+    with pytest.raises(ConfigError, match="Unknown top-level setting"):
+        load_config(path)
+
+
+def test_config_init_creates_parent_directories_and_valid_defaults(tmp_path):
+    path = tmp_path / "nested" / "config.json"
+
+    returned = initialize_config(path)
+    loaded = load_config(path)
+
+    assert returned == path.resolve()
+    assert loaded.config == DEFAULT_CONFIG
+    assert json.loads(path.read_text(encoding="utf-8")) == DEFAULT_CONFIG.to_dict()
+
+
+def test_config_init_refuses_to_overwrite_existing_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("original", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="already exists"):
+        initialize_config(path)
+
+    assert path.read_text(encoding="utf-8") == "original"
+
+
+def test_config_init_force_replaces_existing_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("original", encoding="utf-8")
+
+    initialize_config(path, force=True)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == DEFAULT_CONFIG.to_dict()
+
+
+def test_config_set_preserves_unrelated_settings(tmp_path):
+    path = _write_json(
+        tmp_path / "config.json",
+        {
+            "monitor": {"refresh_interval": 5},
+            "processes": {"limit": 10},
+        },
+    )
+
+    config = set_config_value(path, "cpu.warning", "70")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    assert config.thresholds.cpu.warning == 70
+    assert raw["thresholds"]["cpu_warning"] == 70
+    assert raw["monitor"]["refresh_interval"] == 5
+    assert raw["processes"]["limit"] == 10
+
+
+def test_config_set_supports_string_and_list_values(tmp_path):
+    path = tmp_path / "config.json"
+
+    set_config_value(path, "logging.csv_path", "logs/readings.csv")
+    config = set_config_value(
+        path,
+        "temperature.preferred_sensors",
+        '["coretemp", "k10temp"]',
+    )
+
+    assert config.logging.csv_path == "logs/readings.csv"
+    assert config.temperature.preferred_sensors == ("coretemp", "k10temp")
+
+
+def test_invalid_config_set_does_not_modify_existing_file(tmp_path):
+    path = _write_json(tmp_path / "config.json", {"processes": {"limit": 10}})
+    original = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="greater than zero"):
+        set_config_value(path, "processes.limit", "0")
+
+    assert path.read_bytes() == original
+
+
+def test_unsupported_config_set_does_not_create_file(tmp_path):
+    path = tmp_path / "config.json"
+
+    with pytest.raises(ConfigError, match="Unsupported setting"):
+        set_config_value(path, "unknown.value", "1")
+
+    assert not path.exists()
+
+
+def test_config_writes_use_atomic_replacement(monkeypatch, tmp_path):
+    path = tmp_path / "config.json"
+    replace_calls = []
+    real_replace = os.replace
+
+    def replace(source, destination):
+        replace_calls.append((source, destination))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(config_module.os, "replace", replace)
+
+    initialize_config(path)
+
+    assert len(replace_calls) == 1
+    temporary, destination = replace_calls[0]
+    assert Path(temporary).parent == path.parent
+    assert Path(destination) == path.resolve()
+    assert not Path(temporary).exists()

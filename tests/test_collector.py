@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import systempulse.collector as collector
+from systempulse.config import AppConfig, MonitorConfig, TemperatureConfig
 from systempulse.models import GPUStats
 
 
@@ -33,7 +34,8 @@ def test_cpu_temperature_returns_none_when_platform_has_no_sensor_api(monkeypatc
 
     monkeypatch.setattr(collector.psutil, "sensors_temperatures", unsupported, raising=False)
 
-    assert collector._get_cpu_temperature({"temperature": {"preferred_sensors": []}}) is None
+    config = AppConfig(temperature=TemperatureConfig(preferred_sensors=()))
+    assert collector._get_cpu_temperature(config) is None
 
 
 def test_cpu_temperature_uses_preferred_sensor(monkeypatch):
@@ -45,7 +47,7 @@ def test_cpu_temperature_uses_preferred_sensor(monkeypatch):
         raising=False,
     )
 
-    config = {"temperature": {"preferred_sensors": ["k10temp"]}}
+    config = AppConfig(temperature=TemperatureConfig(preferred_sensors=("k10temp",)))
 
     assert collector._get_cpu_temperature(config) == 61.5
 
@@ -67,10 +69,10 @@ def _mock_system_metrics(monkeypatch):
 
 
 def _collector_config():
-    return {
-        "monitor": {"cpu_sample_interval": 0.25},
-        "temperature": {"preferred_sensors": ["k10temp"]},
-    }
+    return AppConfig(
+        monitor=MonitorConfig(cpu_sample_interval=0.25),
+        temperature=TemperatureConfig(preferred_sensors=("k10temp",)),
+    )
 
 
 def test_collect_complete_system_snapshot_with_windows_drive(monkeypatch):
