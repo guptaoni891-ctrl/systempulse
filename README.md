@@ -189,6 +189,9 @@ Temperature sensor access is OS- and hardware-dependent. Linux commonly exposes 
 
 SystemPulse can record timestamp, CPU/RAM/disk usage, raw byte counts, CPU temperature when available, network totals and speeds, and NVIDIA GPU metrics when available.
 
+Each row now comes from one authoritative sample. Network rates are derived from an earlier counter
+reading with a monotonic clock, while the row timestamp is timezone-aware UTC.
+
 The default output file is `system_log.csv`.
 
 ## Tests and Code Quality
@@ -202,7 +205,15 @@ GitHub Actions runs linting and tests on Windows, macOS, and Linux for Python 3.
 
 ## Architecture
 
-SystemPulse separates responsibilities across modules: `collector.py` collects system metrics, `gpu.py` handles NVIDIA integration, `network.py` measures network activity, `processes.py` inspects running processes, `logger.py` writes CSV history, `ui.py` builds the terminal interface, `config.py` loads settings, `status.py` classifies thresholds, and `cli.py` handles commands.
+SystemPulse separates responsibilities across modules: `collector.py` collects low-level core metrics,
+`gpu.py` handles NVIDIA integration, and `service.py` combines them into the authoritative
+`SystemSnapshot`. The snapshot contains timezone-aware UTC time, network totals and rates, GPU data,
+and lightweight optional-collector diagnostics. `ui.py` only renders samples, `logger.py` writes a
+sample to CSV, `monitor.py` schedules the live terminal display, and `cli.py` handles commands.
+
+The live display is scheduled against monotonic target ticks. Its first sample is immediate; each
+later sample starts at the configured tick. If collection runs past one or more ticks, those ticks are
+skipped rather than replayed, and the next future tick remains anchored to the existing schedule.
 
 ## What Changed in 1.1.0
 

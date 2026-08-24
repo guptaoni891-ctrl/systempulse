@@ -8,7 +8,6 @@ import psutil
 from rich.prompt import Prompt
 
 from systempulse import __version__
-from systempulse.collector import collect_system_snapshot
 from systempulse.config import (
     AppConfig,
     ConfigError,
@@ -18,9 +17,9 @@ from systempulse.config import (
 )
 from systempulse.logger import save_snapshot
 from systempulse.monitor import live_monitor
-from systempulse.network import get_network_totals, measure_network_speed
 from systempulse.paths import resolve_config_path, user_config_path
 from systempulse.processes import get_top_processes
+from systempulse.service import MonitorService
 from systempulse.ui import console, print_processes, print_snapshot
 from systempulse.utils import format_bytes, format_rate
 
@@ -86,23 +85,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _show_network(speed: bool) -> None:
+def _show_network(service: MonitorService, speed: bool) -> None:
     if speed:
-        result = measure_network_speed()
-        console.print(f"Upload:   {format_rate(result.upload_bytes_per_second)}")
-        console.print(f"Download: {format_rate(result.download_bytes_per_second)}")
+        snapshot = service.sample_with_network_rate()
+        console.print(f"Upload:   {format_rate(snapshot.network_speed.upload_bytes_per_second)}")
+        console.print(
+            f"Download: {format_rate(snapshot.network_speed.download_bytes_per_second)}"
+        )
         return
 
-    totals = get_network_totals()
+    totals = service.sample().network
     console.print(f"Sent since boot:     {format_bytes(totals.bytes_sent)}")
     console.print(f"Received since boot: {format_bytes(totals.bytes_received)}")
 
 
-def _save(config: AppConfig, include_gpu: bool, output: str | None = None) -> None:
-    speed = measure_network_speed()
-    snapshot = collect_system_snapshot(config, include_gpu=include_gpu)
-    csv_path = output or config.logging.csv_path
-    path = save_snapshot(snapshot, speed, csv_path)
+def _save(service: MonitorService, output: str | None = None) -> None:
+    snapshot = service.sample_with_network_rate()
+    csv_path = output or service.config.logging.csv_path
+    path = save_snapshot(snapshot, csv_path)
     console.print(f"Saved reading to [bold]{path.resolve()}[/bold]")
 
 
@@ -110,7 +110,8 @@ def _print_config(config: AppConfig) -> None:
     console.print_json(json.dumps(config.to_dict()))
 
 
-def interactive_menu(config: AppConfig, include_gpu: bool) -> None:
+def interactive_menu(service: MonitorService) -> None:
+    config = service.config
     while True:
         console.print(
             "\n[bold]SystemPulse[/bold]\n"
@@ -126,10 +127,9 @@ def interactive_menu(config: AppConfig, include_gpu: bool) -> None:
         choice = Prompt.ask("Choose", choices=[str(number) for number in range(1, 9)])
 
         if choice == "1":
-            snapshot = collect_system_snapshot(config, include_gpu=include_gpu)
-            print_snapshot(snapshot, config)
+            print_snapshot(service.sample(), config)
         elif choice == "2":
-            live_monitor(config, include_gpu=include_gpu)
+            live_monitor(service)
         elif choice == "3":
             process_config = config.processes
             processes = get_top_processes(
@@ -138,11 +138,11 @@ def interactive_menu(config: AppConfig, include_gpu: bool) -> None:
             )
             print_processes(processes)
         elif choice == "4":
-            _show_network(False)
+            _show_network(service, False)
         elif choice == "5":
-            _show_network(True)
+            _show_network(service, True)
         elif choice == "6":
-            _save(config, include_gpu)
+            _save(service)
         elif choice == "7":
             _print_config(config)
         else:
@@ -177,11 +177,12 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
     command = args.command or "menu"
 
     if command == "menu":
-        interactive_menu(config, include_gpu)
+        interactive_menu(MonitorService(config, include_gpu=include_gpu))
     elif command == "snapshot":
-        print_snapshot(collect_system_snapshot(config, include_gpu=include_gpu), config)
+        service = MonitorService(config, include_gpu=include_gpu)
+        print_snapshot(service.sample(), config)
     elif command == "live":
-        live_monitor(config, include_gpu=include_gpu)
+        live_monitor(MonitorService(config, include_gpu=include_gpu))
     elif command == "processes":
         process_config = config.processes
         limit = args.limit or process_config.limit
@@ -192,9 +193,9 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
             )
         )
     elif command == "network":
-        _show_network(args.speed)
+        _show_network(MonitorService(config, include_gpu=False), args.speed)
     elif command == "save":
-        _save(config, include_gpu, args.output)
+        _save(MonitorService(config, include_gpu=include_gpu), args.output)
     elif command == "show-config":
         _print_config(config)
 

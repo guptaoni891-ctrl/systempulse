@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import systempulse.collector as collector
 from systempulse.config import AppConfig, MonitorConfig, TemperatureConfig
-from systempulse.models import GPUStats
+from systempulse.models import DiagnosticKind, NetworkStats
 
 
 def test_get_disk_root_windows_uses_system_drive(monkeypatch):
@@ -60,12 +59,12 @@ def _mock_system_metrics(monkeypatch):
     disk_usage = Mock(
         return_value=SimpleNamespace(percent=40.0, used=40_000, total=100_000)
     )
-    net_io_counters = Mock(return_value=SimpleNamespace(bytes_sent=1_000, bytes_recv=2_000))
+    get_network_totals = Mock(return_value=NetworkStats(bytes_sent=1_000, bytes_received=2_000))
     monkeypatch.setattr(collector.psutil, "cpu_percent", cpu_percent)
     monkeypatch.setattr(collector.psutil, "virtual_memory", virtual_memory)
     monkeypatch.setattr(collector.psutil, "disk_usage", disk_usage)
-    monkeypatch.setattr(collector.psutil, "net_io_counters", net_io_counters)
-    return cpu_percent, virtual_memory, disk_usage, net_io_counters
+    monkeypatch.setattr(collector, "get_network_totals", get_network_totals)
+    return cpu_percent, virtual_memory, disk_usage, get_network_totals
 
 
 def _collector_config():
@@ -75,69 +74,56 @@ def _collector_config():
     )
 
 
-def test_collect_complete_system_snapshot_with_windows_drive(monkeypatch):
-    cpu_percent, virtual_memory, disk_usage, net_io_counters = _mock_system_metrics(
+def test_collect_complete_core_metrics_with_windows_drive(monkeypatch):
+    cpu_percent, virtual_memory, disk_usage, get_network_totals = _mock_system_metrics(
         monkeypatch
     )
-    gpu_stats = (
-        GPUStats(
-            name="Test GPU",
-            usage_percent=30.0,
-            temperature_celsius=50.0,
-            vram_used_mib=1_024.0,
-            vram_total_mib=4_096.0,
-            power_watts=60.0,
-        ),
-    )
-    get_gpu_stats = Mock(return_value=gpu_stats)
     monkeypatch.setattr(collector.platform, "system", lambda: "Windows")
     monkeypatch.setenv("SystemDrive", "E:")
-    monkeypatch.setattr(collector, "_get_cpu_temperature", Mock(return_value=61.5))
-    monkeypatch.setattr(collector, "get_gpu_stats", get_gpu_stats)
+    monkeypatch.setattr(collector, "_collect_cpu_temperature", Mock(return_value=(61.5, ())))
 
-    snapshot = collector.collect_system_snapshot(_collector_config())
+    metrics = collector.collect_core_metrics(_collector_config())
 
-    assert isinstance(snapshot.timestamp, datetime)
-    assert snapshot.timestamp.microsecond == 0
-    assert snapshot.cpu_usage_percent == 12.5
-    assert snapshot.ram_usage_percent == 50.0
-    assert snapshot.ram_used_bytes == 4_000
-    assert snapshot.ram_total_bytes == 8_000
-    assert snapshot.disk_usage_percent == 40.0
-    assert snapshot.disk_used_bytes == 40_000
-    assert snapshot.disk_total_bytes == 100_000
-    assert snapshot.cpu_temperature_celsius == 61.5
-    assert snapshot.network.bytes_sent == 1_000
-    assert snapshot.network.bytes_received == 2_000
-    assert snapshot.gpus == gpu_stats
+    assert metrics.cpu_usage_percent == 12.5
+    assert metrics.ram_usage_percent == 50.0
+    assert metrics.ram_used_bytes == 4_000
+    assert metrics.ram_total_bytes == 8_000
+    assert metrics.disk_usage_percent == 40.0
+    assert metrics.disk_used_bytes == 40_000
+    assert metrics.disk_total_bytes == 100_000
+    assert metrics.cpu_temperature_celsius == 61.5
+    assert metrics.network.bytes_sent == 1_000
+    assert metrics.network.bytes_received == 2_000
+    assert metrics.diagnostics == ()
     cpu_percent.assert_called_once_with(interval=0.25)
     virtual_memory.assert_called_once_with()
     disk_usage.assert_called_once_with("E:\\")
-    net_io_counters.assert_called_once_with(pernic=False, nowrap=True)
-    get_gpu_stats.assert_called_once_with()
+    get_network_totals.assert_called_once_with()
 
 
-def test_collect_snapshot_with_unavailable_temperature_and_gpu(monkeypatch):
+def test_collect_core_metrics_records_unavailable_temperature(monkeypatch):
     _mock_system_metrics(monkeypatch)
     monkeypatch.setattr(collector.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(collector, "_get_cpu_temperature", Mock(return_value=None))
-    monkeypatch.setattr(collector, "get_gpu_stats", Mock(return_value=()))
+    monkeypatch.setattr(collector.psutil, "sensors_temperatures", lambda: {}, raising=False)
 
-    snapshot = collector.collect_system_snapshot(_collector_config())
+    metrics = collector.collect_core_metrics(_collector_config())
 
-    assert snapshot.cpu_temperature_celsius is None
-    assert snapshot.gpus == ()
+    assert metrics.cpu_temperature_celsius is None
+    assert metrics.diagnostics[0].collector == "cpu_temperature"
+    assert metrics.diagnostics[0].kind is DiagnosticKind.UNAVAILABLE
     collector.psutil.disk_usage.assert_called_once_with("/")
 
 
-def test_collect_snapshot_skips_gpu_probe_when_disabled(monkeypatch):
-    _mock_system_metrics(monkeypatch)
-    monkeypatch.setattr(collector, "_get_disk_root", Mock(return_value="/"))
-    monkeypatch.setattr(collector, "_get_cpu_temperature", Mock(return_value=None))
-    get_gpu_stats = Mock()
-    monkeypatch.setattr(collector, "get_gpu_stats", get_gpu_stats)
+def test_malformed_temperature_is_nonfatal_and_diagnostic(monkeypatch):
+    reading = SimpleNamespace(current="invalid", label="CPU package")
+    monkeypatch.setattr(
+        collector.psutil,
+        "sensors_temperatures",
+        lambda: {"coretemp": [reading]},
+        raising=False,
+    )
 
-    snapshot = collector.collect_system_snapshot(_collector_config(), include_gpu=False)
+    temperature, diagnostics = collector._collect_cpu_temperature(_collector_config())
 
-    assert snapshot.gpus == ()
-    get_gpu_stats.assert_not_called()
+    assert temperature is None
+    assert diagnostics[0].kind is DiagnosticKind.MALFORMED_RESULT

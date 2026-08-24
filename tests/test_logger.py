@@ -1,5 +1,5 @@
 import csv
-from datetime import datetime
+from datetime import UTC, datetime
 
 from systempulse.logger import CSV_HEADER, save_snapshot
 from systempulse.models import GPUStats, NetworkSpeed, NetworkStats, SystemSnapshot
@@ -16,9 +16,9 @@ def _gpu(name="GPU One", power_watts=42.5):
     )
 
 
-def _snapshot(*, temperature=61.5, gpus=()):
+def _snapshot(*, temperature=61.5, gpus=(), speed=None):
     return SystemSnapshot(
-        timestamp=datetime(2026, 8, 23, 12, 30, 45),
+        timestamp=datetime(2026, 8, 23, 12, 30, 45, tzinfo=UTC),
         cpu_usage_percent=12.5,
         ram_usage_percent=50.0,
         ram_used_bytes=4_000,
@@ -28,6 +28,7 @@ def _snapshot(*, temperature=61.5, gpus=()):
         disk_total_bytes=100_000,
         cpu_temperature_celsius=temperature,
         network=NetworkStats(bytes_sent=1_000, bytes_received=2_000),
+        network_speed=speed or NetworkSpeed(100.125, 200.456),
         gpus=tuple(gpus),
     )
 
@@ -40,13 +41,13 @@ def _read_rows(path):
 def test_save_snapshot_creates_file_and_header(tmp_path):
     path = tmp_path / "readings.csv"
 
-    returned = save_snapshot(_snapshot(), NetworkSpeed(100.125, 200.456), path)
+    returned = save_snapshot(_snapshot(), path)
     rows = _read_rows(path)
 
     assert returned == path
     assert rows[0] == CSV_HEADER
     assert len(rows) == 2
-    assert rows[1][0] == "2026-08-23 12:30:45"
+    assert rows[1][0] == "2026-08-23 12:30:45+00:00"
     assert rows[1][11:13] == ["100.12", "200.46"]
 
 
@@ -54,8 +55,8 @@ def test_save_snapshot_appends_readings_without_repeating_header(tmp_path):
     path = tmp_path / "readings.csv"
     speed = NetworkSpeed(10.0, 20.0)
 
-    save_snapshot(_snapshot(), speed, path)
-    save_snapshot(_snapshot(temperature=62.0), speed, path)
+    save_snapshot(_snapshot(speed=speed), path)
+    save_snapshot(_snapshot(temperature=62.0, speed=speed), path)
     rows = _read_rows(path)
 
     assert len(rows) == 3
@@ -67,7 +68,7 @@ def test_save_snapshot_appends_readings_without_repeating_header(tmp_path):
 def test_optional_temperature_and_no_gpu_are_recorded_as_unavailable(tmp_path):
     path = tmp_path / "readings.csv"
 
-    save_snapshot(_snapshot(temperature=None), NetworkSpeed(0.0, 0.0), path)
+    save_snapshot(_snapshot(temperature=None, speed=NetworkSpeed(0.0, 0.0)), path)
     row = _read_rows(path)[1]
 
     assert row[8] == "Unavailable"
@@ -79,7 +80,6 @@ def test_gpu_fields_include_optional_missing_power(tmp_path):
 
     save_snapshot(
         _snapshot(gpus=(_gpu(name="GPU, Experimental", power_watts=None),)),
-        NetworkSpeed(1.0, 2.0),
         path,
     )
     row = _read_rows(path)[1]
@@ -95,7 +95,6 @@ def test_csv_currently_records_only_first_gpu(tmp_path):
 
     save_snapshot(
         _snapshot(gpus=(_gpu("First GPU"), _gpu("Second GPU"))),
-        NetworkSpeed(1.0, 2.0),
         path,
     )
     rows = _read_rows(path)
@@ -108,7 +107,7 @@ def test_csv_currently_records_only_first_gpu(tmp_path):
 def test_custom_nested_output_path_is_created(tmp_path):
     path = tmp_path / "nested" / "logs" / "custom.csv"
 
-    returned = save_snapshot(_snapshot(), NetworkSpeed(1.0, 2.0), path)
+    returned = save_snapshot(_snapshot(speed=NetworkSpeed(1.0, 2.0)), path)
 
     assert returned == path
     assert path.is_file()

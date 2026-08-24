@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import subprocess
 
-from systempulse.models import GPUStats
+from systempulse.models import (
+    CollectionDiagnostic,
+    DiagnosticKind,
+    GPUCollection,
+    GPUStats,
+)
 
 QUERY_FIELDS = (
     "name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw"
@@ -44,7 +49,7 @@ def parse_nvidia_smi_output(output: str) -> tuple[GPUStats, ...]:
     return tuple(gpus)
 
 
-def get_gpu_stats(timeout: float = 3.0) -> tuple[GPUStats, ...]:
+def collect_gpu_stats(timeout: float = 3.0) -> GPUCollection:
     command = [
         "nvidia-smi",
         f"--query-gpu={QUERY_FIELDS}",
@@ -59,10 +64,78 @@ def get_gpu_stats(timeout: float = 3.0) -> tuple[GPUStats, ...]:
             check=True,
             timeout=timeout,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return ()
+    except FileNotFoundError:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.COMMAND_MISSING,
+                    message="nvidia-smi is not installed or is not on PATH.",
+                ),
+            ),
+        )
+    except subprocess.TimeoutExpired:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.TIMEOUT,
+                    message=f"nvidia-smi exceeded its {timeout:g} second timeout.",
+                ),
+            ),
+        )
+    except subprocess.CalledProcessError as error:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.EXECUTION_FAILED,
+                    message=f"nvidia-smi exited with status {error.returncode}.",
+                ),
+            ),
+        )
+    except OSError as error:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.EXECUTION_FAILED,
+                    message=f"Could not execute nvidia-smi: {error}",
+                ),
+            ),
+        )
 
+    output = result.stdout.strip()
+    if not output:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.MALFORMED_RESULT,
+                    message="nvidia-smi returned no GPU rows.",
+                ),
+            ),
+        )
     try:
-        return parse_nvidia_smi_output(result.stdout.strip())
-    except ValueError:
-        return ()
+        return GPUCollection(gpus=parse_nvidia_smi_output(output))
+    except ValueError as error:
+        return GPUCollection(
+            gpus=(),
+            diagnostics=(
+                CollectionDiagnostic(
+                    collector="gpu",
+                    kind=DiagnosticKind.MALFORMED_RESULT,
+                    message=f"Could not parse nvidia-smi output: {error}",
+                ),
+            ),
+        )
+
+
+def get_gpu_stats(timeout: float = 3.0) -> tuple[GPUStats, ...]:
+    """Return GPU metrics while preserving the v1 tuple-only API."""
+    return collect_gpu_stats(timeout).gpus

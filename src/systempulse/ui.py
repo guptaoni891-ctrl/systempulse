@@ -6,7 +6,7 @@ from rich.table import Table
 from rich.text import Text
 
 from systempulse.config import AppConfig
-from systempulse.models import NetworkSpeed, ProcessStats, SystemSnapshot
+from systempulse.models import ProcessStats, SystemSnapshot
 from systempulse.status import classify, classify_temperature
 from systempulse.utils import format_bytes, format_rate
 
@@ -26,10 +26,12 @@ def _status_text(label: str) -> Text:
 def build_snapshot_view(
     snapshot: SystemSnapshot,
     config: AppConfig,
-    network_speed: NetworkSpeed | None = None,
+    *,
+    show_network_speed: bool = False,
 ) -> Group:
     thresholds = config.thresholds
-    table = Table(title=f"SystemPulse — {snapshot.timestamp}", expand=True)
+    display_timestamp = snapshot.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    table = Table(title=f"SystemPulse — {display_timestamp}", expand=True)
     table.add_column("Metric", style="bold")
     table.add_column("Value")
     table.add_column("Status")
@@ -81,9 +83,17 @@ def build_snapshot_view(
     table.add_row("Network sent", format_bytes(snapshot.network.bytes_sent), "Since boot")
     table.add_row("Network received", format_bytes(snapshot.network.bytes_received), "Since boot")
 
-    if network_speed is not None:
-        table.add_row("Upload", format_rate(network_speed.upload_bytes_per_second), "Live")
-        table.add_row("Download", format_rate(network_speed.download_bytes_per_second), "Live")
+    if show_network_speed:
+        table.add_row(
+            "Upload",
+            format_rate(snapshot.network_speed.upload_bytes_per_second),
+            "Live",
+        )
+        table.add_row(
+            "Download",
+            format_rate(snapshot.network_speed.download_bytes_per_second),
+            "Live",
+        )
 
     gpu_table = Table(title="GPU", expand=True)
     gpu_table.add_column("GPU")
@@ -117,9 +127,10 @@ def build_snapshot_view(
 def print_snapshot(
     snapshot: SystemSnapshot,
     config: AppConfig,
-    network_speed: NetworkSpeed | None = None,
+    *,
+    show_network_speed: bool = False,
 ) -> None:
-    console.print(build_snapshot_view(snapshot, config, network_speed))
+    console.print(build_snapshot_view(snapshot, config, show_network_speed=show_network_speed))
 
 
 def print_processes(processes: list[ProcessStats]) -> None:

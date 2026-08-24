@@ -3,7 +3,8 @@ import subprocess
 import pytest
 
 import systempulse.gpu as gpu
-from systempulse.gpu import get_gpu_stats, parse_nvidia_smi_output
+from systempulse.gpu import collect_gpu_stats, get_gpu_stats, parse_nvidia_smi_output
+from systempulse.models import DiagnosticKind
 
 
 def test_parse_nvidia_smi_output():
@@ -130,3 +131,36 @@ def test_get_gpu_stats_parses_multiple_gpus(monkeypatch):
 def test_parse_nvidia_smi_output_rejects_malformed_row():
     with pytest.raises(ValueError, match="Unexpected nvidia-smi row"):
         parse_nvidia_smi_output("GPU, 10, 40")
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (FileNotFoundError("nvidia-smi"), DiagnosticKind.COMMAND_MISSING),
+        (subprocess.TimeoutExpired("nvidia-smi", 3.0), DiagnosticKind.TIMEOUT),
+        (subprocess.CalledProcessError(2, "nvidia-smi"), DiagnosticKind.EXECUTION_FAILED),
+        (OSError("permission denied"), DiagnosticKind.EXECUTION_FAILED),
+    ],
+)
+def test_structured_gpu_execution_diagnostics(monkeypatch, error, kind):
+    def failed(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(gpu.subprocess, "run", failed)
+
+    result = collect_gpu_stats()
+
+    assert result.gpus == ()
+    assert result.diagnostics[0].collector == "gpu"
+    assert result.diagnostics[0].kind is kind
+
+
+@pytest.mark.parametrize("output", ["", "not,enough,fields"])
+def test_structured_gpu_malformed_result_diagnostic(monkeypatch, output):
+    completed = subprocess.CompletedProcess("nvidia-smi", 0, stdout=output, stderr="")
+    monkeypatch.setattr(gpu.subprocess, "run", lambda *args, **kwargs: completed)
+
+    result = collect_gpu_stats()
+
+    assert result.gpus == ()
+    assert result.diagnostics[0].kind is DiagnosticKind.MALFORMED_RESULT

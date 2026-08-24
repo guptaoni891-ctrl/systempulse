@@ -1,39 +1,52 @@
 from __future__ import annotations
 
+import math
 import time
+from collections.abc import Callable
 
 from rich.live import Live
 
-from systempulse.collector import collect_system_snapshot
-from systempulse.config import AppConfig
-from systempulse.models import NetworkSpeed
-from systempulse.network import calculate_network_speed
+from systempulse.service import MonitorService
 from systempulse.ui import build_snapshot_view
 
 
-def live_monitor(config: AppConfig, *, include_gpu: bool = True) -> None:
-    refresh_interval = max(config.monitor.refresh_interval, 0.2)
-    previous_snapshot = collect_system_snapshot(config, include_gpu=include_gpu)
-    previous_time = time.monotonic()
-    initial_speed = NetworkSpeed(0.0, 0.0)
+def live_monitor(
+    service: MonitorService,
+    *,
+    monotonic: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> None:
+    """Render on monotonic ticks, skipping missed ticks after slow collections."""
+    clock = monotonic or time.monotonic
+    sleeper = sleep or time.sleep
+    refresh_interval = max(service.config.monitor.refresh_interval, 0.2)
 
-    with Live(
-        build_snapshot_view(previous_snapshot, config, initial_speed),
-        refresh_per_second=4,
-        screen=True,
-    ) as live:
-        try:
+    try:
+        initial_snapshot = service.sample()
+        next_tick = clock() + refresh_interval
+        with Live(
+            build_snapshot_view(initial_snapshot, service.config, show_network_speed=True),
+            refresh_per_second=4,
+            screen=True,
+        ) as live:
             while True:
-                time.sleep(refresh_interval)
-                current_snapshot = collect_system_snapshot(config, include_gpu=include_gpu)
-                current_time = time.monotonic()
-                speed = calculate_network_speed(
-                    previous_snapshot.network,
-                    current_snapshot.network,
-                    current_time - previous_time,
+                delay = next_tick - clock()
+                if delay > 0:
+                    sleeper(delay)
+
+                current_snapshot = service.sample()
+                live.update(
+                    build_snapshot_view(
+                        current_snapshot,
+                        service.config,
+                        show_network_speed=True,
+                    )
                 )
-                live.update(build_snapshot_view(current_snapshot, config, speed))
-                previous_snapshot = current_snapshot
-                previous_time = current_time
-        except KeyboardInterrupt:
-            return
+
+                next_tick += refresh_interval
+                current_time = clock()
+                if next_tick <= current_time:
+                    missed_ticks = math.floor((current_time - next_tick) / refresh_interval) + 1
+                    next_tick += missed_ticks * refresh_interval
+    except KeyboardInterrupt:
+        return

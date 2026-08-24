@@ -1,9 +1,9 @@
-from types import SimpleNamespace
 from unittest.mock import Mock, call
+
+import pytest
 
 import systempulse.monitor as monitor
 from systempulse.config import AppConfig, MonitorConfig
-from systempulse.models import NetworkSpeed
 
 
 class FakeLive:
@@ -37,38 +37,30 @@ def _capture_live(monkeypatch):
     return instances
 
 
-def test_live_monitor_collects_and_renders_repeated_snapshots(monkeypatch):
-    config = AppConfig(monitor=MonitorConfig(refresh_interval=1.5))
-    snapshots = [
-        SimpleNamespace(network="network 1"),
-        SimpleNamespace(network="network 2"),
-        SimpleNamespace(network="network 3"),
-    ]
-    speeds = [NetworkSpeed(10.0, 20.0), NetworkSpeed(30.0, 40.0)]
-    collect = Mock(side_effect=snapshots)
+def _service(interval, snapshots):
+    service = Mock()
+    service.config = AppConfig(monitor=MonitorConfig(refresh_interval=interval))
+    service.sample = Mock(side_effect=snapshots)
+    return service
+
+
+def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
+    snapshots = [object(), object(), object()]
+    service = _service(1.5, snapshots)
     sleep = Mock(side_effect=[None, None, KeyboardInterrupt])
-    monotonic = Mock(side_effect=[10.0, 12.0, 15.0])
-    calculate = Mock(side_effect=speeds)
+    monotonic = Mock(side_effect=[10.0, 10.0, 11.5, 11.5, 13.0, 13.0])
     build = Mock(side_effect=["initial view", "second view", "third view"])
     instances = _capture_live(monkeypatch)
-    monkeypatch.setattr(monitor, "collect_system_snapshot", collect)
-    monkeypatch.setattr(monitor.time, "sleep", sleep)
-    monkeypatch.setattr(monitor.time, "monotonic", monotonic)
-    monkeypatch.setattr(monitor, "calculate_network_speed", calculate)
     monkeypatch.setattr(monitor, "build_snapshot_view", build)
 
-    monitor.live_monitor(config)
+    monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
 
-    assert collect.mock_calls == [call(config, include_gpu=True)] * 3
+    assert service.sample.mock_calls == [call(), call(), call()]
     assert sleep.mock_calls == [call(1.5), call(1.5), call(1.5)]
-    assert calculate.mock_calls == [
-        call(snapshots[0].network, snapshots[1].network, 2.0),
-        call(snapshots[1].network, snapshots[2].network, 3.0),
-    ]
     assert build.mock_calls == [
-        call(snapshots[0], config, NetworkSpeed(0.0, 0.0)),
-        call(snapshots[1], config, speeds[0]),
-        call(snapshots[2], config, speeds[1]),
+        call(snapshots[0], service.config, show_network_speed=True),
+        call(snapshots[1], service.config, show_network_speed=True),
+        call(snapshots[2], service.config, show_network_speed=True),
     ]
     assert len(instances) == 1
     assert instances[0].renderable == "initial view"
@@ -78,21 +70,40 @@ def test_live_monitor_collects_and_renders_repeated_snapshots(monkeypatch):
     assert instances[0].exited is True
 
 
-def test_live_monitor_clamps_refresh_and_handles_keyboard_interrupt(monkeypatch):
-    config = AppConfig(monitor=MonitorConfig(refresh_interval=0.1))
-    snapshot = object()
-    collect = Mock(return_value=snapshot)
-    sleep = Mock(side_effect=KeyboardInterrupt)
-    instances = _capture_live(monkeypatch)
-    monkeypatch.setattr(monitor, "collect_system_snapshot", collect)
-    monkeypatch.setattr(monitor.time, "sleep", sleep)
-    monkeypatch.setattr(monitor.time, "monotonic", Mock(return_value=10.0))
+def test_slow_collection_skips_missed_ticks_without_schedule_drift(monkeypatch):
+    service = _service(2.0, [object(), object()])
+    sleep = Mock(side_effect=[None, KeyboardInterrupt])
+    monotonic = Mock(side_effect=[0.0, 0.0, 5.0, 5.0])
+    _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
-    result = monitor.live_monitor(config, include_gpu=False)
+    monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
+
+    assert service.sample.call_count == 2
+    assert sleep.mock_calls == [call(2.0), call(1.0)]
+
+
+def test_refresh_interval_is_clamped_and_keyboard_interrupt_is_graceful(monkeypatch):
+    service = _service(0.1, [object()])
+    sleep = Mock(side_effect=KeyboardInterrupt)
+    monotonic = Mock(side_effect=[10.0, 10.0])
+    instances = _capture_live(monkeypatch)
+    monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
+
+    result = monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
 
     assert result is None
-    collect.assert_called_once_with(config, include_gpu=False)
-    sleep.assert_called_once_with(0.2)
+    service.sample.assert_called_once_with()
+    assert sleep.call_args.args[0] == pytest.approx(0.2)
     assert instances[0].updates == []
     assert instances[0].exited is True
+
+
+def test_keyboard_interrupt_during_initial_sample_does_not_open_live_display(monkeypatch):
+    service = _service(1.0, [KeyboardInterrupt])
+    instances = _capture_live(monkeypatch)
+
+    result = monitor.live_monitor(service, monotonic=Mock(), sleep=Mock())
+
+    assert result is None
+    assert instances == []

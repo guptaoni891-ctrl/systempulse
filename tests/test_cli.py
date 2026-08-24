@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import psutil
@@ -26,6 +27,15 @@ def _mock_loaded_config(monkeypatch, config=None):
     return loaded_config, load_config
 
 
+def _mock_monitor_service(monkeypatch, config, *, snapshot=None):
+    service = Mock()
+    service.config = config
+    service.sample.return_value = snapshot or object()
+    constructor = Mock(return_value=service)
+    monkeypatch.setattr(cli, "MonitorService", constructor)
+    return service, constructor
+
+
 def test_build_parser_supports_existing_commands_and_global_options():
     parser = cli.build_parser()
 
@@ -43,37 +53,41 @@ def test_build_parser_supports_existing_commands_and_global_options():
 
 def test_no_command_dispatches_to_interactive_menu(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
     menu = Mock()
     monkeypatch.setattr(cli, "interactive_menu", menu)
 
     result = cli.main([])
 
     assert result == 0
-    menu.assert_called_once_with(config, True)
+    constructor.assert_called_once_with(config, include_gpu=True)
+    menu.assert_called_once_with(service)
 
 
 def test_snapshot_dispatches_collected_snapshot(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
     snapshot = object()
-    collect = Mock(return_value=snapshot)
+    service, constructor = _mock_monitor_service(monkeypatch, config, snapshot=snapshot)
     print_snapshot = Mock()
-    monkeypatch.setattr(cli, "collect_system_snapshot", collect)
     monkeypatch.setattr(cli, "print_snapshot", print_snapshot)
 
     assert cli.main(["snapshot"]) == 0
 
-    collect.assert_called_once_with(config, include_gpu=True)
+    constructor.assert_called_once_with(config, include_gpu=True)
+    service.sample.assert_called_once_with()
     print_snapshot.assert_called_once_with(snapshot, config)
 
 
 def test_live_dispatches_without_starting_real_monitor(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
     live_monitor = Mock()
     monkeypatch.setattr(cli, "live_monitor", live_monitor)
 
     assert cli.main(["live"]) == 0
 
-    live_monitor.assert_called_once_with(config, include_gpu=True)
+    constructor.assert_called_once_with(config, include_gpu=True)
+    live_monitor.assert_called_once_with(service)
 
 
 def test_processes_uses_cli_limit_and_configured_sample_interval(monkeypatch):
@@ -96,34 +110,40 @@ def test_processes_uses_cli_limit_and_configured_sample_interval(monkeypatch):
     [(["network"], False), (["network", "--speed"], True)],
 )
 def test_network_dispatches_current_mode(monkeypatch, arguments, speed):
-    _mock_loaded_config(monkeypatch)
+    config, _ = _mock_loaded_config(monkeypatch)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
     show_network = Mock()
     monkeypatch.setattr(cli, "_show_network", show_network)
 
     assert cli.main(arguments) == 0
 
-    show_network.assert_called_once_with(speed)
+    constructor.assert_called_once_with(config, include_gpu=False)
+    show_network.assert_called_once_with(service, speed)
 
 
 def test_save_dispatches_with_output_override(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
     save = Mock()
     monkeypatch.setattr(cli, "_save", save)
 
     assert cli.main(["save", "--output", "logs/custom.csv"]) == 0
 
-    save.assert_called_once_with(config, True, "logs/custom.csv")
+    constructor.assert_called_once_with(config, include_gpu=True)
+    save.assert_called_once_with(service, "logs/custom.csv")
 
 
 def test_network_totals_are_formatted_without_host_network_access(monkeypatch):
-    get_totals = Mock(return_value=NetworkStats(bytes_sent=1_024, bytes_received=2_048))
+    service = Mock()
+    service.sample.return_value = SimpleNamespace(
+        network=NetworkStats(bytes_sent=1_024, bytes_received=2_048)
+    )
     print_output = Mock()
-    monkeypatch.setattr(cli, "get_network_totals", get_totals)
     monkeypatch.setattr(cli.console, "print", print_output)
 
-    cli._show_network(False)
+    cli._show_network(service, False)
 
-    get_totals.assert_called_once_with()
+    service.sample.assert_called_once_with()
     assert print_output.mock_calls == [
         call("Sent since boot:     1.00 KiB"),
         call("Received since boot: 2.00 KiB"),
@@ -131,37 +151,36 @@ def test_network_totals_are_formatted_without_host_network_access(monkeypatch):
 
 
 def test_network_speed_is_formatted_without_sleeping(monkeypatch):
-    measure = Mock(return_value=NetworkSpeed(1_024.0, 2_048.0))
+    service = Mock()
+    service.sample_with_network_rate.return_value = SimpleNamespace(
+        network_speed=NetworkSpeed(1_024.0, 2_048.0)
+    )
     print_output = Mock()
-    monkeypatch.setattr(cli, "measure_network_speed", measure)
     monkeypatch.setattr(cli.console, "print", print_output)
 
-    cli._show_network(True)
+    cli._show_network(service, True)
 
-    measure.assert_called_once_with()
+    service.sample_with_network_rate.assert_called_once_with()
     assert print_output.mock_calls == [
         call("Upload:   1.00 KiB/s"),
         call("Download: 2.00 KiB/s"),
     ]
 
 
-def test_save_uses_one_measured_speed_and_configured_csv_path(monkeypatch):
+def test_save_uses_one_authoritative_sample_and_configured_csv_path(monkeypatch):
     config = _config()
-    speed = NetworkSpeed(10.0, 20.0)
     snapshot = object()
-    measure = Mock(return_value=speed)
-    collect = Mock(return_value=snapshot)
+    service = Mock()
+    service.config = config
+    service.sample_with_network_rate.return_value = snapshot
     save_snapshot = Mock(return_value=Path("system_log.csv"))
-    monkeypatch.setattr(cli, "measure_network_speed", measure)
-    monkeypatch.setattr(cli, "collect_system_snapshot", collect)
     monkeypatch.setattr(cli, "save_snapshot", save_snapshot)
     monkeypatch.setattr(cli.console, "print", Mock())
 
-    cli._save(config, include_gpu=False)
+    cli._save(service)
 
-    measure.assert_called_once_with()
-    collect.assert_called_once_with(config, include_gpu=False)
-    save_snapshot.assert_called_once_with(snapshot, speed, "system_log.csv")
+    service.sample_with_network_rate.assert_called_once_with()
+    save_snapshot.assert_called_once_with(snapshot, "system_log.csv")
 
 
 def test_show_config_legacy_alias_prints_effective_configuration(monkeypatch):
@@ -175,8 +194,8 @@ def test_show_config_legacy_alias_prints_effective_configuration(monkeypatch):
 
 
 def test_explicit_config_path_is_passed_to_loader(monkeypatch, tmp_path):
-    _, load_config = _mock_loaded_config(monkeypatch)
-    monkeypatch.setattr(cli, "collect_system_snapshot", Mock(return_value=object()))
+    config, load_config = _mock_loaded_config(monkeypatch)
+    _mock_monitor_service(monkeypatch, config)
     monkeypatch.setattr(cli, "print_snapshot", Mock())
     config_path = tmp_path / "settings.json"
 
@@ -185,15 +204,15 @@ def test_explicit_config_path_is_passed_to_loader(monkeypatch, tmp_path):
     load_config.assert_called_once_with(str(config_path))
 
 
-def test_no_gpu_is_forwarded_to_snapshot_collection(monkeypatch):
+def test_no_gpu_is_forwarded_to_monitor_service(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
-    collect = Mock(return_value=object())
-    monkeypatch.setattr(cli, "collect_system_snapshot", collect)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
     monkeypatch.setattr(cli, "print_snapshot", Mock())
 
     assert cli.main(["--no-gpu", "snapshot"]) == 0
 
-    collect.assert_called_once_with(config, include_gpu=False)
+    constructor.assert_called_once_with(config, include_gpu=False)
+    service.sample.assert_called_once_with()
 
 
 def test_config_show_uses_effective_config(monkeypatch):
@@ -254,8 +273,9 @@ def test_configuration_error_has_stable_exit_code(monkeypatch):
 
 
 def test_expected_operational_error_has_stable_exit_code(monkeypatch):
-    _mock_loaded_config(monkeypatch)
-    monkeypatch.setattr(cli, "collect_system_snapshot", Mock(side_effect=OSError("unavailable")))
+    config, _ = _mock_loaded_config(monkeypatch)
+    service, _ = _mock_monitor_service(monkeypatch, config)
+    service.sample.side_effect = OSError("unavailable")
     output = Mock()
     monkeypatch.setattr(cli.console, "print", output)
 
@@ -265,19 +285,17 @@ def test_expected_operational_error_has_stable_exit_code(monkeypatch):
 
 
 def test_expected_psutil_error_has_stable_exit_code(monkeypatch):
-    _mock_loaded_config(monkeypatch)
-    monkeypatch.setattr(
-        cli,
-        "collect_system_snapshot",
-        Mock(side_effect=psutil.AccessDenied(10)),
-    )
+    config, _ = _mock_loaded_config(monkeypatch)
+    service, _ = _mock_monitor_service(monkeypatch, config)
+    service.sample.side_effect = psutil.AccessDenied(10)
     monkeypatch.setattr(cli.console, "print", Mock())
 
     assert cli.main(["snapshot"]) == 1
 
 
 def test_keyboard_interrupt_has_conventional_exit_code(monkeypatch):
-    _mock_loaded_config(monkeypatch)
+    config, _ = _mock_loaded_config(monkeypatch)
+    _mock_monitor_service(monkeypatch, config)
     monkeypatch.setattr(cli, "interactive_menu", Mock(side_effect=KeyboardInterrupt))
 
     assert cli.main([]) == 130

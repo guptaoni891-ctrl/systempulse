@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from systempulse.models import NetworkSpeed, SystemSnapshot
+from systempulse.models import SystemSnapshot
 
 CSV_HEADER = [
     "timestamp",
@@ -30,7 +30,6 @@ CSV_HEADER = [
 
 def save_snapshot(
     snapshot: SystemSnapshot,
-    network_speed: NetworkSpeed,
     csv_path: str | Path,
 ) -> Path:
     path = Path(csv_path).expanduser()
@@ -54,8 +53,8 @@ def save_snapshot(
         ),
         snapshot.network.bytes_sent,
         snapshot.network.bytes_received,
-        round(network_speed.upload_bytes_per_second, 2),
-        round(network_speed.download_bytes_per_second, 2),
+        round(snapshot.network_speed.upload_bytes_per_second, 2),
+        round(snapshot.network_speed.download_bytes_per_second, 2),
         gpu.name if gpu else "Unavailable",
         gpu.usage_percent if gpu else "Unavailable",
         gpu.temperature_celsius if gpu else "Unavailable",
