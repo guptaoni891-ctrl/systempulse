@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("menu", help="Open the interactive menu.")
     subparsers.add_parser("snapshot", help="Show a one-time system snapshot.")
     subparsers.add_parser("live", help="Open the live dashboard.")
+    subparsers.add_parser(
+        "alerts",
+        help="Show alert rules and the process-local runtime-state limitation.",
+    )
 
     process_parser = subparsers.add_parser("processes", help="Show top CPU processes.")
     process_parser.add_argument("--limit", type=int, help="Number of processes to show.")
@@ -108,6 +112,14 @@ def _save(service: MonitorService, output: str | None = None) -> None:
 
 def _print_config(config: AppConfig) -> None:
     console.print_json(json.dumps(config.to_dict()))
+
+
+def _print_alert_rules(config: AppConfig) -> None:
+    console.print(
+        "Alert state and event history are process-local and are shown by "
+        "[bold]systempulse live[/bold]. This command displays configured rules only."
+    )
+    console.print_json(json.dumps(config.to_dict()["alerts"]))
 
 
 def interactive_menu(service: MonitorService) -> None:
@@ -183,6 +195,8 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
         print_snapshot(service.sample(), config)
     elif command == "live":
         live_monitor(MonitorService(config, include_gpu=include_gpu))
+    elif command == "alerts":
+        _print_alert_rules(config)
     elif command == "processes":
         process_config = config.processes
         limit = args.limit or process_config.limit

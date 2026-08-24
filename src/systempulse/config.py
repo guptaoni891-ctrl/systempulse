@@ -50,6 +50,12 @@ def _positive_integer(value: Any, name: str) -> int:
     return value
 
 
+def _boolean(value: Any, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{name} must be a Boolean.")
+    return value
+
+
 def _mapping(value: Any, name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigError(f"{name} must be a JSON object.")
@@ -150,19 +156,84 @@ class TemperatureConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AlertRuleConfig:
+    warning: float
+    critical: float
+    enabled: bool = True
+    duration: float = 0.0
+    cooldown: float = 60.0
+    hysteresis: float = 5.0
+
+    def __post_init__(self) -> None:
+        enabled = _boolean(self.enabled, "alert rule enabled")
+        warning = _percentage(self.warning, "alert warning threshold")
+        critical = _percentage(self.critical, "alert critical threshold")
+        duration = _positive_number(
+            self.duration,
+            "alert duration",
+            allow_zero=True,
+        )
+        cooldown = _positive_number(
+            self.cooldown,
+            "alert cooldown",
+            allow_zero=True,
+        )
+        hysteresis = _positive_number(
+            self.hysteresis,
+            "alert hysteresis",
+            allow_zero=True,
+        )
+        if warning >= critical:
+            raise ConfigError("Alert warning threshold must be lower than critical threshold.")
+        if hysteresis >= warning:
+            raise ConfigError("Alert hysteresis must be lower than the warning threshold.")
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "warning", warning)
+        object.__setattr__(self, "critical", critical)
+        object.__setattr__(self, "duration", duration)
+        object.__setattr__(self, "cooldown", cooldown)
+        object.__setattr__(self, "hysteresis", hysteresis)
+
+
+@dataclass(frozen=True, slots=True)
+class AlertsConfig:
+    enabled: bool = True
+    history_limit: int = 100
+    cpu: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(60, 80))
+    memory: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(75, 90))
+    disk: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(80, 90))
+    cpu_temperature: AlertRuleConfig = field(
+        default_factory=lambda: AlertRuleConfig(70, 85)
+    )
+    gpu_usage: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(75, 90))
+    gpu_temperature: AlertRuleConfig = field(
+        default_factory=lambda: AlertRuleConfig(70, 85)
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled", _boolean(self.enabled, "alerts.enabled"))
+        object.__setattr__(
+            self,
+            "history_limit",
+            _positive_integer(self.history_limit, "alerts.history_limit"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     processes: ProcessesConfig = field(default_factory=ProcessesConfig)
     temperature: TemperatureConfig = field(default_factory=TemperatureConfig)
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> AppConfig:
         root = _mapping(raw, "configuration")
         _reject_unknown(
             root,
-            {"thresholds", "monitor", "logging", "processes", "temperature"},
+            {"thresholds", "monitor", "logging", "processes", "temperature", "alerts"},
             "top-level",
         )
 
@@ -195,6 +266,32 @@ class AppConfig:
         _reject_unknown(processes_raw, {"limit", "sample_interval"}, "processes")
         temperature_raw = _mapping(root.get("temperature", {}), "temperature")
         _reject_unknown(temperature_raw, {"preferred_sensors"}, "temperature")
+        alerts_raw = _mapping(root.get("alerts", {}), "alerts")
+        alert_rule_names = {
+            "cpu",
+            "memory",
+            "disk",
+            "cpu_temperature",
+            "gpu_usage",
+            "gpu_temperature",
+        }
+        _reject_unknown(alerts_raw, {"enabled", "history_limit", *alert_rule_names}, "alerts")
+
+        def alert_rule(name: str, default: AlertRuleConfig) -> AlertRuleConfig:
+            rule_raw = _mapping(alerts_raw.get(name, {}), f"alerts.{name}")
+            _reject_unknown(
+                rule_raw,
+                {"enabled", "warning", "critical", "duration", "cooldown", "hysteresis"},
+                f"alerts.{name}",
+            )
+            return AlertRuleConfig(
+                enabled=rule_raw.get("enabled", default.enabled),
+                warning=rule_raw.get("warning", default.warning),
+                critical=rule_raw.get("critical", default.critical),
+                duration=rule_raw.get("duration", default.duration),
+                cooldown=rule_raw.get("cooldown", default.cooldown),
+                hysteresis=rule_raw.get("hysteresis", default.hysteresis),
+            )
 
         return cls(
             thresholds=ThresholdsConfig(
@@ -226,6 +323,22 @@ class AppConfig:
                     "preferred_sensors", defaults.temperature.preferred_sensors
                 )
             ),
+            alerts=AlertsConfig(
+                enabled=alerts_raw.get("enabled", defaults.alerts.enabled),
+                history_limit=alerts_raw.get(
+                    "history_limit", defaults.alerts.history_limit
+                ),
+                cpu=alert_rule("cpu", defaults.alerts.cpu),
+                memory=alert_rule("memory", defaults.alerts.memory),
+                disk=alert_rule("disk", defaults.alerts.disk),
+                cpu_temperature=alert_rule(
+                    "cpu_temperature", defaults.alerts.cpu_temperature
+                ),
+                gpu_usage=alert_rule("gpu_usage", defaults.alerts.gpu_usage),
+                gpu_temperature=alert_rule(
+                    "gpu_temperature", defaults.alerts.gpu_temperature
+                ),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -252,6 +365,28 @@ class AppConfig:
                 "sample_interval": self.processes.sample_interval,
             },
             "temperature": {"preferred_sensors": list(self.temperature.preferred_sensors)},
+            "alerts": {
+                "enabled": self.alerts.enabled,
+                "history_limit": self.alerts.history_limit,
+                **{
+                    name: {
+                        "enabled": rule.enabled,
+                        "warning": rule.warning,
+                        "critical": rule.critical,
+                        "duration": rule.duration,
+                        "cooldown": rule.cooldown,
+                        "hysteresis": rule.hysteresis,
+                    }
+                    for name, rule in (
+                        ("cpu", self.alerts.cpu),
+                        ("memory", self.alerts.memory),
+                        ("disk", self.alerts.disk),
+                        ("cpu_temperature", self.alerts.cpu_temperature),
+                        ("gpu_usage", self.alerts.gpu_usage),
+                        ("gpu_temperature", self.alerts.gpu_temperature),
+                    )
+                },
+            },
         }
 
 
@@ -331,7 +466,7 @@ def initialize_config(path: str | Path | None = None, *, force: bool = False) ->
     return target
 
 
-SETTING_PATHS: dict[str, tuple[str, str]] = {
+SETTING_PATHS: dict[str, tuple[str, ...]] = {
     "cpu.warning": ("thresholds", "cpu_warning"),
     "cpu.critical": ("thresholds", "cpu_critical"),
     "ram.warning": ("thresholds", "memory_warning"),
@@ -350,7 +485,31 @@ SETTING_PATHS: dict[str, tuple[str, str]] = {
     "processes.limit": ("processes", "limit"),
     "processes.sample_interval": ("processes", "sample_interval"),
     "temperature.preferred_sensors": ("temperature", "preferred_sensors"),
+    "alerts.enabled": ("alerts", "enabled"),
+    "alerts.history_limit": ("alerts", "history_limit"),
 }
+
+for _rule_name in (
+    "cpu",
+    "memory",
+    "disk",
+    "cpu_temperature",
+    "gpu_usage",
+    "gpu_temperature",
+):
+    for _field_name in (
+        "enabled",
+        "warning",
+        "critical",
+        "duration",
+        "cooldown",
+        "hysteresis",
+    ):
+        SETTING_PATHS[f"alerts.{_rule_name}.{_field_name}"] = (
+            "alerts",
+            _rule_name,
+            _field_name,
+        )
 
 
 def _parse_setting_value(raw_value: str) -> Any:
@@ -369,11 +528,13 @@ def set_config_value(path: str | Path, key: str, raw_value: str) -> AppConfig:
 
     raw = _read_mapping(target) if target.is_file() else {}
     candidate = deepcopy(raw)
-    section_name, field_name = setting_path
-    section = candidate.setdefault(section_name, {})
-    if not isinstance(section, dict):
-        raise ConfigError(f"{section_name} must be a JSON object.")
-    section[field_name] = _parse_setting_value(raw_value)
+    section = candidate
+    for section_name in setting_path[:-1]:
+        child = section.setdefault(section_name, {})
+        if not isinstance(child, dict):
+            raise ConfigError(f"{section_name} must be a JSON object.")
+        section = child
+    section[setting_path[-1]] = _parse_setting_value(raw_value)
     config = AppConfig.from_mapping(candidate)
     _write_mapping_atomic(target, candidate)
     return config

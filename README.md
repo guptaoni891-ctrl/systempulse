@@ -17,6 +17,7 @@ A modular cross-platform terminal system monitor built with Python. SystemPulse 
 - Live terminal dashboard powered by Rich
 - CSV history logging
 - Configurable warning and critical thresholds
+- Stateful live alerts with duration, hysteresis, cooldown, and per-GPU rules
 - Graceful fallbacks when temperature sensors or `nvidia-smi` are unavailable
 - Automated tests and linting on Windows, macOS, and Linux
 
@@ -88,6 +89,12 @@ Start the live dashboard:
 systempulse live
 ```
 
+Show configured alert rules and the runtime-state limitation:
+
+```bash
+systempulse alerts
+```
+
 Show the top CPU-consuming processes:
 
 ```bash
@@ -122,6 +129,8 @@ Show the active configuration path, create a user configuration, or update a set
 systempulse config path
 systempulse config init
 systempulse config set cpu.warning 70
+systempulse config set alerts.cpu.warning 80
+systempulse config set alerts.cpu.duration 30
 ```
 
 `config init` refuses to replace an existing file. Use `systempulse config init --force`
@@ -178,6 +187,12 @@ thresholds; refresh and CPU sampling intervals; CSV output; process count; and p
 sensor names. Configuration is validated before monitoring starts, and invalid files produce a
 concise configuration error instead of a runtime `KeyError` or `TypeError`.
 
+The `alerts` section has a global `enabled` flag, a bounded `history_limit`, and rules for
+`cpu`, `memory`, `disk`, `cpu_temperature`, `gpu_usage`, and `gpu_temperature`. Each rule has
+`enabled`, `warning`, `critical`, `duration`, `cooldown`, and `hysteresis` settings. These alert
+thresholds are intentionally separate from the legacy presentation thresholds so changing a live
+alert rule does not silently alter the existing status display.
+
 An explicitly selected or discovered malformed file is reported as an error. A missing explicit file
 is also an error; when no file is selected or discovered, built-in defaults are used silently.
 
@@ -209,11 +224,25 @@ SystemPulse separates responsibilities across modules: `collector.py` collects l
 `gpu.py` handles NVIDIA integration, and `service.py` combines them into the authoritative
 `SystemSnapshot`. The snapshot contains timezone-aware UTC time, network totals and rates, GPU data,
 and lightweight optional-collector diagnostics. `ui.py` only renders samples, `logger.py` writes a
-sample to CSV, `monitor.py` schedules the live terminal display, and `cli.py` handles commands.
+sample to CSV, `alerts.py` evaluates snapshots and owns process-local alert state, `monitor.py`
+schedules the live terminal display and invokes the alert engine, and `cli.py` handles commands.
 
 The live display is scheduled against monotonic target ticks. Its first sample is immediate; each
 later sample starts at the configured tick. If collection runs past one or more ticks, those ticks are
 skipped rather than replayed, and the next future tick remains anchored to the existing schedule.
+
+Alert duration is measured with a monotonic clock. The timer starts when a metric first reaches any
+alert threshold, continues if it escalates while pending, and is cancelled if the metric recovers or
+becomes unavailable before opening. Open alerts escalate immediately at the critical threshold and
+recover only below `threshold - hysteresis`. A missing active metric holds its last state and does not
+produce a false resolution. Transition events are emitted only for open, escalation, de-escalation,
+and resolution; cooldown delays reopening after a resolution. GPU rules are evaluated independently
+using stable snapshot-order identities such as `gpu.0.usage` and `gpu.1.temperature`.
+
+Alert state and recent events exist only for the lifetime of the live process and are bounded by
+`alerts.history_limit`; no history is persisted yet. `systempulse snapshot` remains a stateless
+one-shot metric view and does not manufacture duration-based alert state. `systempulse alerts` shows
+configured rules and explains this process-local limitation.
 
 ## What Changed in 1.1.0
 

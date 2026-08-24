@@ -3,8 +3,14 @@ from io import StringIO
 
 from rich.console import Console
 
-from systempulse.config import AppConfig
-from systempulse.models import NetworkSpeed, NetworkStats, SystemSnapshot
+from systempulse.config import AlertsConfig, AppConfig
+from systempulse.models import (
+    ActiveAlert,
+    AlertSeverity,
+    NetworkSpeed,
+    NetworkStats,
+    SystemSnapshot,
+)
 from systempulse.ui import build_snapshot_view
 
 
@@ -25,14 +31,15 @@ def _snapshot():
     )
 
 
-def _render(*, show_network_speed):
+def _render(*, show_network_speed, active_alerts=None, config=None):
     output = StringIO()
     console = Console(file=output, force_terminal=False, width=120)
     console.print(
         build_snapshot_view(
             _snapshot(),
-            AppConfig(),
+            config or AppConfig(),
             show_network_speed=show_network_speed,
+            active_alerts=active_alerts,
         )
     )
     return output.getvalue()
@@ -54,3 +61,59 @@ def test_one_time_snapshot_preserves_hidden_rate_rows():
     assert "Network received" in rendered
     assert "Upload" not in rendered
     assert "Download" not in rendered
+    assert "Alerts" not in rendered
+
+
+def test_live_alert_section_has_compact_healthy_state():
+    rendered = _render(show_network_speed=True, active_alerts=())
+
+    assert "Alerts" in rendered
+    assert "Healthy" in rendered
+    assert "No active alerts" in rendered
+
+
+def test_active_warning_and_critical_alerts_are_rendered():
+    timestamp = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    alerts = (
+        ActiveAlert(
+            metric="cpu.usage",
+            label="CPU usage",
+            severity=AlertSeverity.WARNING,
+            current_value=72.5,
+            threshold=60,
+            unit="%",
+            opened_at=timestamp,
+            updated_at=timestamp,
+        ),
+        ActiveAlert(
+            metric="gpu.0.temperature",
+            label="GPU 0 (Test GPU) temperature",
+            severity=AlertSeverity.CRITICAL,
+            current_value=90,
+            threshold=85,
+            unit="°C",
+            opened_at=timestamp,
+            updated_at=timestamp,
+        ),
+    )
+
+    rendered = _render(show_network_speed=True, active_alerts=alerts)
+
+    assert "WARNING" in rendered
+    assert "CPU usage" in rendered
+    assert "72.5%" in rendered
+    assert "CRITICAL" in rendered
+    assert "GPU 0 (Test GPU) temperature" in rendered
+    assert "90.0°C" in rendered
+
+
+def test_disabled_alert_section_is_explicit_in_live_view():
+    config = AppConfig(alerts=AlertsConfig(enabled=False))
+
+    rendered = _render(
+        show_network_speed=True,
+        active_alerts=(),
+        config=config,
+    )
+
+    assert "Alert evaluation is disabled" in rendered

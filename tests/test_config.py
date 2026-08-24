@@ -8,6 +8,7 @@ import systempulse.config as config_module
 import systempulse.paths as paths
 from systempulse.config import (
     DEFAULT_CONFIG,
+    AlertRuleConfig,
     AppConfig,
     ConfigError,
     initialize_config,
@@ -34,6 +35,60 @@ def test_typed_defaults_match_existing_v1_values():
     assert config.logging.csv_path == "system_log.csv"
     assert config.processes.limit == 5
     assert config.temperature.preferred_sensors[0] == "k10temp"
+
+
+def test_default_alert_configuration_is_typed_and_enabled():
+    alerts = AppConfig().alerts
+
+    assert alerts.enabled is True
+    assert alerts.history_limit == 100
+    assert alerts.cpu == AlertRuleConfig(60, 80)
+    assert alerts.memory.warning == 75
+    assert alerts.cpu_temperature.critical == 85
+    assert alerts.gpu_usage.enabled is True
+    assert alerts.gpu_temperature.hysteresis == 5
+
+
+def test_partial_alert_configuration_deep_merges_rule_defaults():
+    config = AppConfig.from_mapping(
+        {
+            "alerts": {
+                "history_limit": 25,
+                "cpu": {"warning": 70, "duration": 15},
+                "gpu_usage": {"enabled": False},
+            }
+        }
+    )
+
+    assert config.alerts.history_limit == 25
+    assert config.alerts.cpu.warning == 70
+    assert config.alerts.cpu.critical == 80
+    assert config.alerts.cpu.duration == 15
+    assert config.alerts.cpu.cooldown == 60
+    assert config.alerts.gpu_usage.enabled is False
+    assert config.alerts.disk.warning == 80
+
+
+@pytest.mark.parametrize(
+    "alerts",
+    [
+        "enabled",
+        {"enabled": "true"},
+        {"history_limit": 0},
+        {"cpu": False},
+        {"cpu": {"warning": "high"}},
+        {"cpu": {"warning": 80, "critical": 80}},
+        {"cpu": {"duration": -1}},
+        {"cpu": {"cooldown": -1}},
+        {"cpu": {"hysteresis": -1}},
+        {"cpu": {"warning": 5, "hysteresis": 5}},
+        {"unsupported": {"warning": 50}},
+        {"cpu": {"unsupported": 1}},
+    ],
+)
+def test_invalid_alert_configuration_is_rejected(alerts):
+    with pytest.raises(ConfigError):
+        AppConfig.from_mapping({"alerts": alerts})
 
 
 def test_no_discovered_config_uses_typed_defaults(monkeypatch, tmp_path):
@@ -272,6 +327,28 @@ def test_config_set_supports_string_and_list_values(tmp_path):
 
     assert config.logging.csv_path == "logs/readings.csv"
     assert config.temperature.preferred_sensors == ("coretemp", "k10temp")
+
+
+def test_config_set_supports_nested_alert_values(tmp_path):
+    path = tmp_path / "config.json"
+
+    set_config_value(path, "alerts.cpu.warning", "70")
+    config = set_config_value(path, "alerts.cpu.enabled", "false")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    assert config.alerts.cpu.warning == 70
+    assert config.alerts.cpu.enabled is False
+    assert raw["alerts"]["cpu"] == {"warning": 70, "enabled": False}
+
+
+def test_invalid_alert_config_set_does_not_modify_file(tmp_path):
+    path = _write_json(tmp_path / "config.json", {"alerts": {"cpu": {"warning": 70}}})
+    original = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="Boolean"):
+        set_config_value(path, "alerts.cpu.enabled", "yes")
+
+    assert path.read_bytes() == original
 
 
 def test_invalid_config_set_does_not_modify_existing_file(tmp_path):

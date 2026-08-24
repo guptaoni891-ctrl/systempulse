@@ -44,6 +44,7 @@ def test_build_parser_supports_existing_commands_and_global_options():
     assert parser.parse_args([]).command is None
     assert parser.parse_args(["snapshot"]).command == "snapshot"
     assert parser.parse_args(["live"]).command == "live"
+    assert parser.parse_args(["alerts"]).command == "alerts"
     assert parser.parse_args(["processes", "--limit", "10"]).limit == 10
     assert parser.parse_args(["network", "--speed"]).speed is True
     assert parser.parse_args(["save", "--output", "custom.csv"]).output == "custom.csv"
@@ -88,6 +89,19 @@ def test_live_dispatches_without_starting_real_monitor(monkeypatch):
 
     constructor.assert_called_once_with(config, include_gpu=True)
     live_monitor.assert_called_once_with(service)
+
+
+def test_alerts_command_reports_rules_without_claiming_persistent_state(monkeypatch):
+    _mock_loaded_config(monkeypatch)
+    output = Mock()
+    print_json = Mock()
+    monkeypatch.setattr(cli.console, "print", output)
+    monkeypatch.setattr(cli.console, "print_json", print_json)
+
+    assert cli.main(["alerts"]) == 0
+
+    assert "process-local" in output.call_args.args[0]
+    assert '"history_limit": 100' in print_json.call_args.args[0]
 
 
 def test_processes_uses_cli_limit_and_configured_sample_interval(monkeypatch):
@@ -260,6 +274,19 @@ def test_config_set_updates_active_path(monkeypatch, tmp_path):
     assert cli.main(["config", "set", "cpu.warning", "70"]) == 0
 
     set_value.assert_called_once_with(path, "cpu.warning", "70")
+
+
+def test_config_set_forwards_nested_alert_setting(monkeypatch, tmp_path):
+    path = tmp_path / "config.json"
+    resolution = ConfigPath(path, "user", True)
+    monkeypatch.setattr(cli, "resolve_config_path", Mock(return_value=resolution))
+    set_value = Mock(return_value=AppConfig())
+    monkeypatch.setattr(cli, "set_config_value", set_value)
+    monkeypatch.setattr(cli.console, "print", Mock())
+
+    assert cli.main(["config", "set", "alerts.cpu.warning", "70"]) == 0
+
+    set_value.assert_called_once_with(path, "alerts.cpu.warning", "70")
 
 
 def test_configuration_error_has_stable_exit_code(monkeypatch):

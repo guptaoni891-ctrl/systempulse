@@ -6,7 +6,7 @@ from rich.table import Table
 from rich.text import Text
 
 from systempulse.config import AppConfig
-from systempulse.models import ProcessStats, SystemSnapshot
+from systempulse.models import ActiveAlert, AlertSeverity, ProcessStats, SystemSnapshot
 from systempulse.status import classify, classify_temperature
 from systempulse.utils import format_bytes, format_rate
 
@@ -28,6 +28,7 @@ def build_snapshot_view(
     config: AppConfig,
     *,
     show_network_speed: bool = False,
+    active_alerts: tuple[ActiveAlert, ...] | None = None,
 ) -> Group:
     thresholds = config.thresholds
     display_timestamp = snapshot.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -121,7 +122,35 @@ def build_snapshot_view(
                 _status_text(gpu_status),
             )
 
-    return Group(table, gpu_table)
+    renderables = [table, gpu_table]
+    if active_alerts is not None:
+        renderables.append(_build_alerts_view(active_alerts, enabled=config.alerts.enabled))
+    return Group(*renderables)
+
+
+def _build_alerts_view(
+    alerts: tuple[ActiveAlert, ...],
+    *,
+    enabled: bool,
+) -> Table:
+    table = Table(title="Alerts", expand=True)
+    table.add_column("Severity", style="bold")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+
+    if not enabled:
+        table.add_row("Disabled", "Alert evaluation is disabled", "—")
+    elif not alerts:
+        table.add_row(Text("Healthy", style="green"), "No active alerts", "—")
+    else:
+        for alert in alerts:
+            style = "bold red" if alert.severity is AlertSeverity.CRITICAL else "yellow"
+            table.add_row(
+                Text(alert.severity.value.upper(), style=style),
+                alert.label,
+                f"{alert.current_value:.1f}{alert.unit}",
+            )
+    return table
 
 
 def print_snapshot(

@@ -50,17 +50,44 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
     sleep = Mock(side_effect=[None, None, KeyboardInterrupt])
     monotonic = Mock(side_effect=[10.0, 10.0, 11.5, 11.5, 13.0, 13.0])
     build = Mock(side_effect=["initial view", "second view", "third view"])
+    alert_engine = Mock()
+    alert_engine.active_alerts = ()
     instances = _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", build)
 
-    monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
+    monitor.live_monitor(
+        service,
+        monotonic=monotonic,
+        sleep=sleep,
+        alert_engine=alert_engine,
+    )
 
     assert service.sample.mock_calls == [call(), call(), call()]
     assert sleep.mock_calls == [call(1.5), call(1.5), call(1.5)]
     assert build.mock_calls == [
-        call(snapshots[0], service.config, show_network_speed=True),
-        call(snapshots[1], service.config, show_network_speed=True),
-        call(snapshots[2], service.config, show_network_speed=True),
+        call(
+            snapshots[0],
+            service.config,
+            show_network_speed=True,
+            active_alerts=(),
+        ),
+        call(
+            snapshots[1],
+            service.config,
+            show_network_speed=True,
+            active_alerts=(),
+        ),
+        call(
+            snapshots[2],
+            service.config,
+            show_network_speed=True,
+            active_alerts=(),
+        ),
+    ]
+    assert alert_engine.evaluate.mock_calls == [
+        call(snapshots[0]),
+        call(snapshots[1]),
+        call(snapshots[2]),
     ]
     assert len(instances) == 1
     assert instances[0].renderable == "initial view"
@@ -77,7 +104,14 @@ def test_slow_collection_skips_missed_ticks_without_schedule_drift(monkeypatch):
     _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
-    monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
+    alert_engine = Mock(active_alerts=())
+
+    monitor.live_monitor(
+        service,
+        monotonic=monotonic,
+        sleep=sleep,
+        alert_engine=alert_engine,
+    )
 
     assert service.sample.call_count == 2
     assert sleep.mock_calls == [call(2.0), call(1.0)]
@@ -90,7 +124,12 @@ def test_refresh_interval_is_clamped_and_keyboard_interrupt_is_graceful(monkeypa
     instances = _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
-    result = monitor.live_monitor(service, monotonic=monotonic, sleep=sleep)
+    result = monitor.live_monitor(
+        service,
+        monotonic=monotonic,
+        sleep=sleep,
+        alert_engine=Mock(active_alerts=()),
+    )
 
     assert result is None
     service.sample.assert_called_once_with()
@@ -103,7 +142,12 @@ def test_keyboard_interrupt_during_initial_sample_does_not_open_live_display(mon
     service = _service(1.0, [KeyboardInterrupt])
     instances = _capture_live(monkeypatch)
 
-    result = monitor.live_monitor(service, monotonic=Mock(), sleep=Mock())
+    result = monitor.live_monitor(
+        service,
+        monotonic=Mock(),
+        sleep=Mock(),
+        alert_engine=Mock(active_alerts=()),
+    )
 
     assert result is None
     assert instances == []
