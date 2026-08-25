@@ -299,10 +299,31 @@ unavailable when there are fewer than two samples or a counter reset is detected
 
 ```bash
 python -m pytest
+python -m pytest --cov=systempulse --cov-report=term-missing
 python -m ruff check .
+python -m ruff format --check .
+python -m mypy src/systempulse
+python -m build
+python -m twine check dist/*
 ```
 
-GitHub Actions runs linting and tests on Windows, macOS, and Linux for Python 3.11 and 3.13.
+Install and run the fast repository checks before committing:
+
+```bash
+pre-commit install
+pre-commit run --all-files
+```
+
+Coverage uses branch measurement against `systempulse` and enforces a 90% project floor. Ordinary
+`python -m pytest` remains concise and does not collect coverage unless requested.
+
+SystemPulse supports Python 3.11, 3.12, and 3.13. GitHub Actions tests the minimum and every declared
+minor version on Linux, with representative Python 3.13 coverage on Windows and macOS. Python 3.14
+is not currently claimed because it is not part of the tested support matrix.
+
+CI separates lint/format/type/coverage checks, the cross-platform test matrix, and package validation.
+The package job builds both distributions, runs `twine check`, installs the wheel without repository
+imports, and separately verifies the base and Prometheus-extra installation modes.
 
 ## Architecture
 

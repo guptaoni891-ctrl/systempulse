@@ -28,7 +28,7 @@ def _load_prometheus() -> tuple[Any, Any, Any, Any]:
         from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
     except ImportError as error:
         raise PrometheusDependencyError(
-            'Prometheus support is not installed. Install it with '
+            "Prometheus support is not installed. Install it with "
             '`pip install "systempulse[prometheus]"`.'
         ) from error
     return CollectorRegistry, start_http_server, CounterMetricFamily, GaugeMetricFamily
@@ -217,9 +217,7 @@ class SystemPulseCollector:
         }
         for index, gpu in enumerate(snapshot.gpus):
             label = [str(index)]
-            families["systempulse_gpu_usage_ratio"].add_metric(
-                label, _ratio(gpu.usage_percent)
-            )
+            families["systempulse_gpu_usage_ratio"].add_metric(label, _ratio(gpu.usage_percent))
             families["systempulse_gpu_temperature_celsius"].add_metric(
                 label, gpu.temperature_celsius
             )

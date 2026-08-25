@@ -150,9 +150,7 @@ def _show_network(service: MonitorService, speed: bool) -> None:
     if speed:
         snapshot = service.sample_with_network_rate()
         console.print(f"Upload:   {format_rate(snapshot.network_speed.upload_bytes_per_second)}")
-        console.print(
-            f"Download: {format_rate(snapshot.network_speed.download_bytes_per_second)}"
-        )
+        console.print(f"Download: {format_rate(snapshot.network_speed.download_bytes_per_second)}")
         return
 
     totals = service.sample().network

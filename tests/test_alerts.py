@@ -301,9 +301,7 @@ def test_multiple_gpus_have_independent_bounded_identities():
         monotonic=Mock(return_value=0.0),
     )
 
-    events = engine.evaluate(
-        _snapshot(gpus=(_gpu("First", 70), _gpu("Second", 90)))
-    )
+    events = engine.evaluate(_snapshot(gpus=(_gpu("First", 70), _gpu("Second", 90))))
 
     assert [event.metric for event in events] == ["gpu.0.usage", "gpu.1.usage"]
     assert [event.severity for event in events] == [
@@ -331,9 +329,7 @@ def test_event_history_is_bounded_and_supports_recent_limit():
         AlertTransition.DEESCALATED,
         AlertTransition.RESOLVED,
     ]
-    assert [event.transition for event in engine.recent_events(1)] == [
-        AlertTransition.RESOLVED
-    ]
+    assert [event.transition for event in engine.recent_events(1)] == [AlertTransition.RESOLVED]
     assert engine.recent_events(0) == ()
 
 

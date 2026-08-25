@@ -40,8 +40,16 @@ def _temperature_value(reading: Any) -> float:
 def _collect_cpu_temperature(
     config: AppConfig,
 ) -> tuple[float | None, tuple[CollectionDiagnostic, ...]]:
+    sensor_reader = getattr(psutil, "sensors_temperatures", None)
+    if sensor_reader is None:
+        return None, (
+            _diagnostic(
+                DiagnosticKind.UNAVAILABLE,
+                "CPU temperature sensors are not supported on this platform.",
+            ),
+        )
     try:
-        sensors = psutil.sensors_temperatures()
+        sensors = sensor_reader()
     except (AttributeError, NotImplementedError):
         return None, (
             _diagnostic(

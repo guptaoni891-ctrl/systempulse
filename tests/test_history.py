@@ -319,9 +319,7 @@ def test_counter_reset_is_not_reported_as_negative_transfer(tmp_path):
     store = HistoryStore(tmp_path / "history.db")
     start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
     store.record_sample(_snapshot(timestamp=start, sent=5_000, received=8_000))
-    store.record_sample(
-        _snapshot(timestamp=start + timedelta(minutes=1), sent=100, received=200)
-    )
+    store.record_sample(_snapshot(timestamp=start + timedelta(minutes=1), sent=100, received=200))
 
     summary = store.query_summary()
 
@@ -399,9 +397,7 @@ def test_non_utc_snapshot_timestamp_is_persisted_as_utc(tmp_path):
     store = HistoryStore(tmp_path / "history.db")
     offset = timezone(timedelta(hours=4))
 
-    store.record_sample(
-        _snapshot(timestamp=datetime(2026, 8, 24, 12, 0, tzinfo=offset))
-    )
+    store.record_sample(_snapshot(timestamp=datetime(2026, 8, 24, 12, 0, tzinfo=offset)))
     sample = store.recent_samples(limit=1)[0]
 
     assert sample.timestamp == datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
@@ -435,3 +431,25 @@ def test_corrupt_database_produces_understandable_error(tmp_path):
 
     with pytest.raises(HistoryError, match="initialize history database"):
         HistoryStore(path)
+
+
+def test_invalid_recent_sample_timestamp_is_reported_as_corrupt_data(tmp_path):
+    path = tmp_path / "history.db"
+    store = HistoryStore(path)
+    store.record_sample(_snapshot())
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("UPDATE snapshots SET timestamp_utc = 'not-a-timestamp'")
+
+    with pytest.raises(HistoryError, match="invalid timestamp"):
+        store.recent_samples()
+
+
+def test_invalid_alert_event_timestamp_is_reported_as_corrupt_data(tmp_path):
+    path = tmp_path / "history.db"
+    store = HistoryStore(path)
+    store.record_sample(_snapshot(), (_event(),))
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("UPDATE alert_events SET timestamp_utc = 'not-a-timestamp'")
+
+    with pytest.raises(HistoryError, match="invalid timestamp"):
+        store.recent_alert_events()

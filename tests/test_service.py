@@ -51,9 +51,7 @@ def _service(core_collector, **kwargs):
     return MonitorService(
         AppConfig(),
         core_collector=core_collector,
-        gpu_collector=kwargs.pop(
-            "gpu_collector", Mock(return_value=GPUCollection(gpus=()))
-        ),
+        gpu_collector=kwargs.pop("gpu_collector", Mock(return_value=GPUCollection(gpus=()))),
         monotonic=kwargs.pop("monotonic", Mock(return_value=10.0)),
         wall_clock=kwargs.pop(
             "wall_clock",
@@ -164,9 +162,7 @@ def test_optional_collector_diagnostics_are_preserved_with_usable_sample():
     )
     service = _service(
         Mock(return_value=_core(temperature=None, diagnostics=(temperature_diagnostic,))),
-        gpu_collector=Mock(
-            return_value=GPUCollection(gpus=(), diagnostics=(gpu_diagnostic,))
-        ),
+        gpu_collector=Mock(return_value=GPUCollection(gpus=(), diagnostics=(gpu_diagnostic,))),
     )
 
     sample = service.sample()

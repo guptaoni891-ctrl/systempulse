@@ -142,7 +142,11 @@ class HistoryStore:
                         snapshot.network_speed.download_bytes_per_second,
                     ),
                 )
-                snapshot_id = int(cursor.lastrowid)
+                snapshot_id = cursor.lastrowid
+                if snapshot_id is None:
+                    raise HistoryError(
+                        f"History database {self.path} did not return a snapshot identifier."
+                    )
                 connection.executemany(
                     """
                     INSERT INTO gpu_samples (
@@ -232,7 +236,7 @@ class HistoryStore:
                     SELECT MAX(gpu.temperature_celsius) AS peak_gpu_temperature
                     FROM gpu_samples AS gpu
                     JOIN snapshots AS sample ON sample.id = gpu.snapshot_id
-                    {clause.replace('timestamp_utc', 'sample.timestamp_utc')}
+                    {clause.replace("timestamp_utc", "sample.timestamp_utc")}
                     """,
                     parameters,
                 ).fetchone()
@@ -241,7 +245,7 @@ class HistoryStore:
                     SELECT COUNT(*) AS event_count
                     FROM alert_events AS event
                     JOIN snapshots AS sample ON sample.id = event.snapshot_id
-                    {clause.replace('timestamp_utc', 'sample.timestamp_utc')}
+                    {clause.replace("timestamp_utc", "sample.timestamp_utc")}
                     """,
                     parameters,
                 ).fetchone()
@@ -290,7 +294,7 @@ class HistoryStore:
                         COUNT(gpu.gpu_index) AS gpu_count
                     FROM snapshots AS sample
                     LEFT JOIN gpu_samples AS gpu ON gpu.snapshot_id = sample.id
-                    {clause.replace('timestamp_utc', 'sample.timestamp_utc')}
+                    {clause.replace("timestamp_utc", "sample.timestamp_utc")}
                     GROUP BY sample.id
                     ORDER BY sample.timestamp_utc DESC, sample.id DESC
                     LIMIT ?
@@ -302,7 +306,7 @@ class HistoryStore:
 
         return tuple(
             HistoricalSample(
-                timestamp=_parse_timestamp(row["timestamp_utc"]),
+                timestamp=_required_timestamp(row["timestamp_utc"]),
                 cpu_usage_percent=float(row["cpu_usage_percent"]),
                 memory_usage_percent=float(row["ram_usage_percent"]),
                 disk_usage_percent=float(row["disk_usage_percent"]),
@@ -342,7 +346,7 @@ class HistoryStore:
         try:
             return tuple(
                 AlertEvent(
-                    timestamp=_parse_timestamp(row["timestamp_utc"]),
+                    timestamp=_required_timestamp(row["timestamp_utc"]),
                     metric=row["metric"],
                     label=row["label"],
                     severity=AlertSeverity(row["severity"]),
@@ -502,8 +506,21 @@ def _parse_timestamp(value: str | None) -> datetime | None:
         raise HistoryError(f"History database contains an invalid timestamp: {value!r}.") from error
 
 
+def _required_timestamp(value: object) -> datetime:
+    if not isinstance(value, str):
+        raise HistoryError(f"History database contains an invalid timestamp: {value!r}.")
+    timestamp = _parse_timestamp(value)
+    if timestamp is None:  # Defensive narrowing; a string cannot parse as None.
+        raise HistoryError(f"History database contains an invalid timestamp: {value!r}.")
+    return timestamp
+
+
 def _optional_float(value: object) -> float | None:
-    return None if value is None else float(value)
+    if value is None:
+        return None
+    if not isinstance(value, (str, bytes, int, float)):
+        raise HistoryError(f"History database contains an invalid number: {value!r}.")
+    return float(value)
 
 
 def _counter_change(first: int, last: int) -> int | None:

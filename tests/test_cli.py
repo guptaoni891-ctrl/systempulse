@@ -91,6 +91,46 @@ def test_no_command_dispatches_to_interactive_menu(monkeypatch):
     )
 
 
+def test_interactive_menu_dispatches_each_existing_choice_once(monkeypatch):
+    config = AppConfig()
+    snapshot = object()
+    service = Mock(config=config)
+    service.sample.return_value = snapshot
+    history_store = Mock()
+    processes = [object()]
+    monkeypatch.setattr(
+        cli.Prompt,
+        "ask",
+        Mock(side_effect=["1", "2", "3", "4", "5", "6", "7", "8"]),
+    )
+    monkeypatch.setattr(cli.console, "print", Mock())
+    monkeypatch.setattr(cli, "print_snapshot", Mock())
+    monkeypatch.setattr(cli, "live_monitor", Mock())
+    monkeypatch.setattr(cli, "get_top_processes", Mock(return_value=processes))
+    monkeypatch.setattr(cli, "print_processes", Mock())
+    monkeypatch.setattr(cli, "_show_network", Mock())
+    monkeypatch.setattr(cli, "_save", Mock())
+    monkeypatch.setattr(cli, "_print_config", Mock())
+
+    cli.interactive_menu(
+        service,
+        history_store=history_store,
+        history_warning="history unavailable",
+    )
+
+    cli.print_snapshot.assert_called_once_with(snapshot, config)
+    cli.live_monitor.assert_called_once_with(
+        service,
+        history_store=history_store,
+        history_warning="history unavailable",
+    )
+    cli.get_top_processes.assert_called_once_with(limit=5, sample_interval=1.0)
+    cli.print_processes.assert_called_once_with(processes)
+    assert cli._show_network.mock_calls == [call(service, False), call(service, True)]
+    cli._save.assert_called_once_with(service)
+    cli._print_config.assert_called_once_with(config)
+
+
 def test_snapshot_dispatches_collected_snapshot(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
     snapshot = object()
@@ -517,9 +557,7 @@ def test_invalid_command_exits_with_argparse_error(monkeypatch, capsys):
 
 
 def test_serve_uses_prometheus_config_and_monitor_service(monkeypatch):
-    config = AppConfig(
-        prometheus=PrometheusConfig(host="localhost", port=9200, interval=3.0)
-    )
+    config = AppConfig(prometheus=PrometheusConfig(host="localhost", port=9200, interval=3.0))
     _mock_loaded_config(monkeypatch, config)
     service, constructor = _mock_monitor_service(monkeypatch, config)
     serve = Mock()
@@ -532,17 +570,16 @@ def test_serve_uses_prometheus_config_and_monitor_service(monkeypatch):
 
 
 def test_serve_cli_values_override_prometheus_config(monkeypatch):
-    config = AppConfig(
-        prometheus=PrometheusConfig(host="config-host", port=9200, interval=3.0)
-    )
+    config = AppConfig(prometheus=PrometheusConfig(host="config-host", port=9200, interval=3.0))
     _mock_loaded_config(monkeypatch, config)
     service, _ = _mock_monitor_service(monkeypatch, config)
     serve = Mock()
     monkeypatch.setattr(cli, "serve_exporter", serve)
 
-    assert cli.main(
-        ["--no-gpu", "serve", "--host", "127.0.0.2", "--port", "9300", "--interval", "1"]
-    ) == 0
+    assert (
+        cli.main(["--no-gpu", "serve", "--host", "127.0.0.2", "--port", "9300", "--interval", "1"])
+        == 0
+    )
 
     serve.assert_called_once_with(service, host="127.0.0.2", port=9300, interval=1.0)
     cli.MonitorService.assert_called_once_with(config, include_gpu=False)

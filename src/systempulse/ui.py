@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from rich.console import Console, Group
+from datetime import datetime
+
+from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -131,7 +133,7 @@ def build_snapshot_view(
                 _status_text(gpu_status),
             )
 
-    renderables = [table, gpu_table]
+    renderables: list[RenderableType] = [table, gpu_table]
     if active_alerts is not None:
         renderables.append(_build_alerts_view(active_alerts, enabled=config.alerts.enabled))
     if history_warning is not None:
@@ -280,7 +282,7 @@ def print_alert_history(events: tuple[AlertEvent, ...], database: str) -> None:
     console.print(table)
 
 
-def _utc_text(value) -> str:
+def _utc_text(value: datetime | None) -> str:
     return "Unavailable" if value is None else value.strftime("%Y-%m-%d %H:%M:%S UTC")
 
 

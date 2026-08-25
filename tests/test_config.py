@@ -64,9 +64,7 @@ def test_default_history_configuration_uses_platform_data_directory():
 def test_partial_history_configuration_deep_merges_defaults(tmp_path):
     database = tmp_path / "custom.db"
 
-    config = AppConfig.from_mapping(
-        {"history": {"enabled": False, "database": str(database)}}
-    )
+    config = AppConfig.from_mapping({"history": {"enabled": False, "database": str(database)}})
 
     assert config.history.enabled is False
     assert config.history.database == str(database)

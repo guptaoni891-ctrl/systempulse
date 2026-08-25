@@ -37,6 +37,15 @@ def test_cpu_temperature_returns_none_when_platform_has_no_sensor_api(monkeypatc
     assert collector._get_cpu_temperature(config) is None
 
 
+def test_cpu_temperature_reports_unavailable_when_sensor_attribute_is_absent(monkeypatch):
+    monkeypatch.delattr(collector.psutil, "sensors_temperatures", raising=False)
+
+    temperature, diagnostics = collector._collect_cpu_temperature(AppConfig())
+
+    assert temperature is None
+    assert diagnostics[0].kind is DiagnosticKind.UNAVAILABLE
+
+
 def test_cpu_temperature_uses_preferred_sensor(monkeypatch):
     reading = SimpleNamespace(current=61.5, label="Tctl")
     monkeypatch.setattr(
@@ -53,12 +62,8 @@ def test_cpu_temperature_uses_preferred_sensor(monkeypatch):
 
 def _mock_system_metrics(monkeypatch):
     cpu_percent = Mock(return_value=12.5)
-    virtual_memory = Mock(
-        return_value=SimpleNamespace(percent=50.0, used=4_000, total=8_000)
-    )
-    disk_usage = Mock(
-        return_value=SimpleNamespace(percent=40.0, used=40_000, total=100_000)
-    )
+    virtual_memory = Mock(return_value=SimpleNamespace(percent=50.0, used=4_000, total=8_000))
+    disk_usage = Mock(return_value=SimpleNamespace(percent=40.0, used=40_000, total=100_000))
     get_network_totals = Mock(return_value=NetworkStats(bytes_sent=1_000, bytes_received=2_000))
     monkeypatch.setattr(collector.psutil, "cpu_percent", cpu_percent)
     monkeypatch.setattr(collector.psutil, "virtual_memory", virtual_memory)
@@ -75,9 +80,7 @@ def _collector_config():
 
 
 def test_collect_complete_core_metrics_with_windows_drive(monkeypatch):
-    cpu_percent, virtual_memory, disk_usage, get_network_totals = _mock_system_metrics(
-        monkeypatch
-    )
+    cpu_percent, virtual_memory, disk_usage, get_network_totals = _mock_system_metrics(monkeypatch)
     monkeypatch.setattr(collector.platform, "system", lambda: "Windows")
     monkeypatch.setenv("SystemDrive", "E:")
     monkeypatch.setattr(collector, "_collect_cpu_temperature", Mock(return_value=(61.5, ())))

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import StringIO
 
@@ -10,10 +11,12 @@ from systempulse.models import (
     AlertEvent,
     AlertSeverity,
     AlertTransition,
+    GPUStats,
     HistoricalSample,
     HistorySummary,
     NetworkSpeed,
     NetworkStats,
+    ProcessStats,
     SystemSnapshot,
 )
 from systempulse.ui import build_snapshot_view
@@ -142,6 +145,65 @@ def test_history_failure_is_rendered_as_compact_warning():
     assert "Database unavailable for this session." in rendered
 
 
+def test_available_temperature_and_gpu_metrics_are_rendered():
+    snapshot = replace(
+        _snapshot(),
+        cpu_temperature_celsius=61.5,
+        gpus=(GPUStats("Test GPU", 25.0, 55.0, 512.0, 4_096.0, None),),
+    )
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=120)
+
+    console.print(build_snapshot_view(snapshot, AppConfig()))
+    rendered = output.getvalue()
+
+    assert "61.5" in rendered
+    assert "Test GPU" in rendered
+    assert "512 / 4096 MiB" in rendered
+    assert "Unavailable" in rendered
+
+
+def test_process_table_and_warning_panel_render(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=120))
+
+    ui.print_processes([ProcessStats(123, "python", 12.5, 4.0)])
+    ui.print_warning("Configuration fallback active")
+    rendered = output.getvalue()
+
+    assert "Top CPU Processes" in rendered
+    assert "python" in rendered
+    assert "Configuration warning" in rendered
+
+
+def test_empty_history_and_alert_history_render_clear_states(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=120))
+    summary = HistorySummary(
+        period_start=None,
+        period_end=None,
+        sample_count=0,
+        average_cpu_percent=None,
+        peak_cpu_percent=None,
+        average_memory_percent=None,
+        peak_memory_percent=None,
+        average_disk_percent=None,
+        peak_disk_percent=None,
+        peak_cpu_temperature_celsius=None,
+        peak_gpu_temperature_celsius=None,
+        observed_network_sent_change_bytes=None,
+        observed_network_received_change_bytes=None,
+        alert_event_count=0,
+    )
+
+    ui.print_history(summary, (), "empty.db")
+    ui.print_alert_history((), "empty.db")
+    rendered = output.getvalue()
+
+    assert "No samples" in rendered
+    assert "No events" in rendered
+
+
 def test_history_summary_and_recent_samples_render_clear_network_semantics(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=140))
@@ -162,9 +224,7 @@ def test_history_summary_and_recent_samples_render_clear_network_semantics(monke
         observed_network_received_change_bytes=2_048,
         alert_event_count=1,
     )
-    samples = (
-        HistoricalSample(start, 20, 40, 60, None, 1_024, 2_048, 2),
-    )
+    samples = (HistoricalSample(start, 20, 40, 60, None, 1_024, 2_048, 2),)
 
     ui.print_history(summary, samples, "test.db")
     rendered = output.getvalue()

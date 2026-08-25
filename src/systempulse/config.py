@@ -52,7 +52,7 @@ def _positive_integer(value: Any, name: str) -> int:
         raise ConfigError(f"{name} must be an integer.")
     if value <= 0:
         raise ConfigError(f"{name} must be greater than zero.")
-    return value
+    return int(value)
 
 
 def _boolean(value: Any, name: str) -> bool:
@@ -207,13 +207,9 @@ class AlertsConfig:
     cpu: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(60, 80))
     memory: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(75, 90))
     disk: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(80, 90))
-    cpu_temperature: AlertRuleConfig = field(
-        default_factory=lambda: AlertRuleConfig(70, 85)
-    )
+    cpu_temperature: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(70, 85))
     gpu_usage: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(75, 90))
-    gpu_temperature: AlertRuleConfig = field(
-        default_factory=lambda: AlertRuleConfig(70, 85)
-    )
+    gpu_temperature: AlertRuleConfig = field(default_factory=lambda: AlertRuleConfig(70, 85))
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled", _boolean(self.enabled, "alerts.enabled"))
@@ -383,9 +379,7 @@ class AppConfig:
                     "cpu_sample_interval", defaults.monitor.cpu_sample_interval
                 ),
             ),
-            logging=LoggingConfig(
-                csv_path=logging_raw.get("csv_path", defaults.logging.csv_path)
-            ),
+            logging=LoggingConfig(csv_path=logging_raw.get("csv_path", defaults.logging.csv_path)),
             processes=ProcessesConfig(
                 limit=processes_raw.get("limit", defaults.processes.limit),
                 sample_interval=processes_raw.get(
@@ -399,26 +393,18 @@ class AppConfig:
             ),
             alerts=AlertsConfig(
                 enabled=alerts_raw.get("enabled", defaults.alerts.enabled),
-                history_limit=alerts_raw.get(
-                    "history_limit", defaults.alerts.history_limit
-                ),
+                history_limit=alerts_raw.get("history_limit", defaults.alerts.history_limit),
                 cpu=alert_rule("cpu", defaults.alerts.cpu),
                 memory=alert_rule("memory", defaults.alerts.memory),
                 disk=alert_rule("disk", defaults.alerts.disk),
-                cpu_temperature=alert_rule(
-                    "cpu_temperature", defaults.alerts.cpu_temperature
-                ),
+                cpu_temperature=alert_rule("cpu_temperature", defaults.alerts.cpu_temperature),
                 gpu_usage=alert_rule("gpu_usage", defaults.alerts.gpu_usage),
-                gpu_temperature=alert_rule(
-                    "gpu_temperature", defaults.alerts.gpu_temperature
-                ),
+                gpu_temperature=alert_rule("gpu_temperature", defaults.alerts.gpu_temperature),
             ),
             history=HistoryConfig(
                 enabled=history_raw.get("enabled", defaults.history.enabled),
                 database=history_raw.get("database", defaults.history.database),
-                retention_days=history_raw.get(
-                    "retention_days", defaults.history.retention_days
-                ),
+                retention_days=history_raw.get("retention_days", defaults.history.retention_days),
             ),
             prometheus=PrometheusConfig(
                 host=prometheus_raw.get("host", defaults.prometheus.host),

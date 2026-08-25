@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from typing import Literal, overload
 
 from systempulse.models import (
     CollectionDiagnostic,
@@ -9,9 +10,15 @@ from systempulse.models import (
     GPUStats,
 )
 
-QUERY_FIELDS = (
-    "name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw"
-)
+QUERY_FIELDS = "name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw"
+
+
+@overload
+def _parse_number(value: str, *, allow_none: Literal[False] = False) -> float: ...
+
+
+@overload
+def _parse_number(value: str, *, allow_none: Literal[True]) -> float | None: ...
 
 
 def _parse_number(value: str, *, allow_none: bool = False) -> float | None:
@@ -38,10 +45,10 @@ def parse_nvidia_smi_output(output: str) -> tuple[GPUStats, ...]:
         gpus.append(
             GPUStats(
                 name=name,
-                usage_percent=float(_parse_number(usage)),
-                temperature_celsius=float(_parse_number(temperature)),
-                vram_used_mib=float(_parse_number(used)),
-                vram_total_mib=float(_parse_number(total)),
+                usage_percent=_parse_number(usage),
+                temperature_celsius=_parse_number(temperature),
+                vram_used_mib=_parse_number(used),
+                vram_total_mib=_parse_number(total),
                 power_watts=_parse_number(power, allow_none=True),
             )
         )

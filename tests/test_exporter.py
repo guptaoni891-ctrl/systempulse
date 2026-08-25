@@ -173,11 +173,7 @@ def test_multiple_gpus_share_metric_names_with_stable_index_labels():
     _, registry = _registry(_snapshot(gpus=(_gpu(0), _gpu(1))))
     samples = _samples(registry)
 
-    labels = {
-        labels
-        for (name, labels) in samples
-        if name == "systempulse_gpu_usage_ratio"
-    }
+    labels = {labels for (name, labels) in samples if name == "systempulse_gpu_usage_ratio"}
     assert labels == {(("gpu", "0"),), (("gpu", "1"),)}
     assert "gpu_0" not in _text(registry)
     assert "GPU 0" not in _text(registry)
