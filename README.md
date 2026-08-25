@@ -16,6 +16,7 @@ A modular cross-platform terminal system monitor built with Python. SystemPulse 
 - NVIDIA GPU usage, temperature, VRAM, and power through `nvidia-smi`
 - Live terminal dashboard powered by Rich
 - CSV history logging
+- Local SQLite metric and alert-event history
 - Configurable warning and critical thresholds
 - Stateful live alerts with duration, hysteresis, cooldown, and per-GPU rules
 - Graceful fallbacks when temperature sensors or `nvidia-smi` are unavailable
@@ -93,6 +94,15 @@ Show configured alert rules and the runtime-state limitation:
 
 ```bash
 systempulse alerts
+systempulse alerts --history --limit 20
+```
+
+Show local metric history:
+
+```bash
+systempulse history
+systempulse history --hours 24 --limit 20
+systempulse history --days 7
 ```
 
 Show the top CPU-consuming processes:
@@ -131,6 +141,8 @@ systempulse config init
 systempulse config set cpu.warning 70
 systempulse config set alerts.cpu.warning 80
 systempulse config set alerts.cpu.duration 30
+systempulse config set history.retention_days 14
+systempulse config set history.database /custom/path/systempulse.db
 ```
 
 `config init` refuses to replace an existing file. Use `systempulse config init --force`
@@ -193,6 +205,11 @@ The `alerts` section has a global `enabled` flag, a bounded `history_limit`, and
 thresholds are intentionally separate from the legacy presentation thresholds so changing a live
 alert rule does not silently alter the existing status display.
 
+The `history` section contains `enabled`, `database`, and `retention_days`. History is enabled by
+default, retains 30 days, and stores `systempulse.db` under the platform-specific SystemPulse user
+data directory selected by `platformdirs`. A custom database path may be absolute or relative to the
+process working directory. Retention must be a positive number of days.
+
 An explicitly selected or discovered malformed file is reported as an error. A missing explicit file
 is also an error; when no file is selected or discovered, built-in defaults are used silently.
 
@@ -208,6 +225,19 @@ Each row now comes from one authoritative sample. Network rates are derived from
 reading with a monotonic clock, while the row timestamp is timezone-aware UTC.
 
 The default output file is `system_log.csv`.
+
+SQLite history is additional functionality and does not replace CSV. `systempulse snapshot` remains
+display-only, while `systempulse live` writes each authoritative sample and its same-cycle alert
+transitions in one SQLite transaction. Collector diagnostics remain runtime-only and are not stored.
+
+History is local to the machine and contains normalized rows for snapshots, every GPU in each
+snapshot, and alert transition events. Cleanup runs once when a history-enabled live session starts;
+expired snapshots cascade to their GPU and alert-event rows. SystemPulse does not run `VACUUM` per
+sample.
+
+History summaries report the change between the first and last observed network counters in the
+selected period. This is explicitly a counter change, not a guaranteed transfer total; it is shown as
+unavailable when there are fewer than two samples or a counter reset is detected.
 
 ## Tests and Code Quality
 
@@ -225,7 +255,8 @@ SystemPulse separates responsibilities across modules: `collector.py` collects l
 `SystemSnapshot`. The snapshot contains timezone-aware UTC time, network totals and rates, GPU data,
 and lightweight optional-collector diagnostics. `ui.py` only renders samples, `logger.py` writes a
 sample to CSV, `alerts.py` evaluates snapshots and owns process-local alert state, `monitor.py`
-schedules the live terminal display and invokes the alert engine, and `cli.py` handles commands.
+schedules the live terminal display and invokes the alert engine, `history.py` owns SQLite schema,
+transactions, retention, and queries, and `cli.py` handles commands.
 
 The live display is scheduled against monotonic target ticks. Its first sample is immediate; each
 later sample starts at the configured tick. If collection runs past one or more ticks, those ticks are
@@ -240,9 +271,10 @@ and resolution; cooldown delays reopening after a resolution. GPU rules are eval
 using stable snapshot-order identities such as `gpu.0.usage` and `gpu.1.temperature`.
 
 Alert state and recent events exist only for the lifetime of the live process and are bounded by
-`alerts.history_limit`; no history is persisted yet. `systempulse snapshot` remains a stateless
-one-shot metric view and does not manufacture duration-based alert state. `systempulse alerts` shows
-configured rules and explains this process-local limitation.
+`alerts.history_limit`; active state is not persisted. Transition events are persisted when SQLite
+history is enabled and can be read with `systempulse alerts --history`. `systempulse snapshot`
+remains a stateless one-shot metric view and does not manufacture duration-based alert state or write
+history. Plain `systempulse alerts` continues to show configured rules.
 
 ## What Changed in 1.1.0
 

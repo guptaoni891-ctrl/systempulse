@@ -4,6 +4,7 @@ import pytest
 
 import systempulse.monitor as monitor
 from systempulse.config import AppConfig, MonitorConfig
+from systempulse.history import HistoryError
 
 
 class FakeLive:
@@ -70,18 +71,21 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
             service.config,
             show_network_speed=True,
             active_alerts=(),
+            history_warning=None,
         ),
         call(
             snapshots[1],
             service.config,
             show_network_speed=True,
             active_alerts=(),
+            history_warning=None,
         ),
         call(
             snapshots[2],
             service.config,
             show_network_speed=True,
             active_alerts=(),
+            history_warning=None,
         ),
     ]
     assert alert_engine.evaluate.mock_calls == [
@@ -151,3 +155,58 @@ def test_keyboard_interrupt_during_initial_sample_does_not_open_live_display(mon
 
     assert result is None
     assert instances == []
+
+
+def test_live_monitor_persists_each_authoritative_sample_with_same_cycle_events(
+    monkeypatch,
+):
+    snapshots = [object(), object()]
+    service = _service(1.0, snapshots)
+    events = [(object(),), ()]
+    alert_engine = Mock(active_alerts=())
+    alert_engine.evaluate.side_effect = events
+    history_store = Mock()
+    sleep = Mock(side_effect=[None, KeyboardInterrupt])
+    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0])
+    _capture_live(monkeypatch)
+    monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
+
+    monitor.live_monitor(
+        service,
+        monotonic=monotonic,
+        sleep=sleep,
+        alert_engine=alert_engine,
+        history_store=history_store,
+    )
+
+    assert service.sample.mock_calls == [call(), call()]
+    assert history_store.record_sample.mock_calls == [
+        call(snapshots[0], events[0]),
+        call(snapshots[1], events[1]),
+    ]
+
+
+def test_history_failure_is_shown_once_and_disables_later_writes(monkeypatch):
+    snapshots = [object(), object()]
+    service = _service(1.0, snapshots)
+    alert_engine = Mock(active_alerts=())
+    alert_engine.evaluate.return_value = ()
+    history_store = Mock()
+    history_store.record_sample.side_effect = HistoryError("database unavailable")
+    sleep = Mock(side_effect=[None, KeyboardInterrupt])
+    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0])
+    build = Mock(return_value="view")
+    _capture_live(monkeypatch)
+    monkeypatch.setattr(monitor, "build_snapshot_view", build)
+
+    monitor.live_monitor(
+        service,
+        monotonic=monotonic,
+        sleep=sleep,
+        alert_engine=alert_engine,
+        history_store=history_store,
+    )
+
+    history_store.record_sample.assert_called_once_with(snapshots[0], ())
+    assert build.call_args_list[0].kwargs["history_warning"] == "database unavailable"
+    assert build.call_args_list[1].kwargs["history_warning"] == "database unavailable"

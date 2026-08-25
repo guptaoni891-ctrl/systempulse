@@ -11,10 +11,12 @@ from systempulse.config import (
     AlertRuleConfig,
     AppConfig,
     ConfigError,
+    HistoryConfig,
     initialize_config,
     load_config,
     set_config_value,
 )
+from systempulse.paths import default_history_database
 
 
 def _write_json(path, value):
@@ -47,6 +49,45 @@ def test_default_alert_configuration_is_typed_and_enabled():
     assert alerts.cpu_temperature.critical == 85
     assert alerts.gpu_usage.enabled is True
     assert alerts.gpu_temperature.hysteresis == 5
+
+
+def test_default_history_configuration_uses_platform_data_directory():
+    history = AppConfig().history
+
+    assert history == HistoryConfig()
+    assert history.enabled is True
+    assert Path(history.database) == default_history_database()
+    assert history.retention_days == 30
+
+
+def test_partial_history_configuration_deep_merges_defaults(tmp_path):
+    database = tmp_path / "custom.db"
+
+    config = AppConfig.from_mapping(
+        {"history": {"enabled": False, "database": str(database)}}
+    )
+
+    assert config.history.enabled is False
+    assert config.history.database == str(database)
+    assert config.history.retention_days == 30
+
+
+@pytest.mark.parametrize(
+    "history",
+    [
+        "enabled",
+        {"enabled": "true"},
+        {"database": ""},
+        {"database": 42},
+        {"retention_days": 0},
+        {"retention_days": -1},
+        {"retention_days": 1.5},
+        {"unsupported": True},
+    ],
+)
+def test_invalid_history_configuration_is_rejected(history):
+    with pytest.raises(ConfigError):
+        AppConfig.from_mapping({"history": history})
 
 
 def test_partial_alert_configuration_deep_merges_rule_defaults():
@@ -339,6 +380,26 @@ def test_config_set_supports_nested_alert_values(tmp_path):
     assert config.alerts.cpu.warning == 70
     assert config.alerts.cpu.enabled is False
     assert raw["alerts"]["cpu"] == {"warning": 70, "enabled": False}
+
+
+def test_config_set_supports_history_values(tmp_path):
+    path = tmp_path / "config.json"
+
+    set_config_value(path, "history.database", "logs/history.db")
+    set_config_value(path, "history.retention_days", "14")
+    config = set_config_value(path, "history.enabled", "false")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+
+    assert config.history == HistoryConfig(
+        enabled=False,
+        database="logs/history.db",
+        retention_days=14,
+    )
+    assert raw["history"] == {
+        "database": "logs/history.db",
+        "retention_days": 14,
+        "enabled": False,
+    }
 
 
 def test_invalid_alert_config_set_does_not_modify_file(tmp_path):

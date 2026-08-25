@@ -10,7 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from systempulse.paths import ConfigPath, resolve_config_path, user_config_path
+from systempulse.paths import (
+    ConfigPath,
+    default_history_database,
+    resolve_config_path,
+    user_config_path,
+)
 
 
 class ConfigError(ValueError):
@@ -220,6 +225,26 @@ class AlertsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoryConfig:
+    enabled: bool = True
+    database: str = field(default_factory=lambda: str(default_history_database()))
+    retention_days: int = 30
+
+    def __post_init__(self) -> None:
+        enabled = _boolean(self.enabled, "history.enabled")
+        if not isinstance(self.database, str) or not self.database.strip():
+            raise ConfigError("history.database must be a non-empty path string.")
+        if "\x00" in self.database:
+            raise ConfigError("history.database must not contain null characters.")
+        retention_days = _positive_integer(
+            self.retention_days,
+            "history.retention_days",
+        )
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "retention_days", retention_days)
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
@@ -227,13 +252,22 @@ class AppConfig:
     processes: ProcessesConfig = field(default_factory=ProcessesConfig)
     temperature: TemperatureConfig = field(default_factory=TemperatureConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> AppConfig:
         root = _mapping(raw, "configuration")
         _reject_unknown(
             root,
-            {"thresholds", "monitor", "logging", "processes", "temperature", "alerts"},
+            {
+                "thresholds",
+                "monitor",
+                "logging",
+                "processes",
+                "temperature",
+                "alerts",
+                "history",
+            },
             "top-level",
         )
 
@@ -276,6 +310,12 @@ class AppConfig:
             "gpu_temperature",
         }
         _reject_unknown(alerts_raw, {"enabled", "history_limit", *alert_rule_names}, "alerts")
+        history_raw = _mapping(root.get("history", {}), "history")
+        _reject_unknown(
+            history_raw,
+            {"enabled", "database", "retention_days"},
+            "history",
+        )
 
         def alert_rule(name: str, default: AlertRuleConfig) -> AlertRuleConfig:
             rule_raw = _mapping(alerts_raw.get(name, {}), f"alerts.{name}")
@@ -339,6 +379,13 @@ class AppConfig:
                     "gpu_temperature", defaults.alerts.gpu_temperature
                 ),
             ),
+            history=HistoryConfig(
+                enabled=history_raw.get("enabled", defaults.history.enabled),
+                database=history_raw.get("database", defaults.history.database),
+                retention_days=history_raw.get(
+                    "retention_days", defaults.history.retention_days
+                ),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -386,6 +433,11 @@ class AppConfig:
                         ("gpu_temperature", self.alerts.gpu_temperature),
                     )
                 },
+            },
+            "history": {
+                "enabled": self.history.enabled,
+                "database": self.history.database,
+                "retention_days": self.history.retention_days,
             },
         }
 
@@ -487,6 +539,9 @@ SETTING_PATHS: dict[str, tuple[str, ...]] = {
     "temperature.preferred_sensors": ("temperature", "preferred_sensors"),
     "alerts.enabled": ("alerts", "enabled"),
     "alerts.history_limit": ("alerts", "history_limit"),
+    "history.enabled": ("history", "enabled"),
+    "history.database": ("history", "database"),
+    "history.retention_days": ("history", "retention_days"),
 }
 
 for _rule_name in (

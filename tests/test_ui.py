@@ -3,10 +3,15 @@ from io import StringIO
 
 from rich.console import Console
 
+import systempulse.ui as ui
 from systempulse.config import AlertsConfig, AppConfig
 from systempulse.models import (
     ActiveAlert,
+    AlertEvent,
     AlertSeverity,
+    AlertTransition,
+    HistoricalSample,
+    HistorySummary,
     NetworkSpeed,
     NetworkStats,
     SystemSnapshot,
@@ -31,7 +36,13 @@ def _snapshot():
     )
 
 
-def _render(*, show_network_speed, active_alerts=None, config=None):
+def _render(
+    *,
+    show_network_speed,
+    active_alerts=None,
+    config=None,
+    history_warning=None,
+):
     output = StringIO()
     console = Console(file=output, force_terminal=False, width=120)
     console.print(
@@ -40,6 +51,7 @@ def _render(*, show_network_speed, active_alerts=None, config=None):
             config or AppConfig(),
             show_network_speed=show_network_speed,
             active_alerts=active_alerts,
+            history_warning=history_warning,
         )
     )
     return output.getvalue()
@@ -117,3 +129,73 @@ def test_disabled_alert_section_is_explicit_in_live_view():
     )
 
     assert "Alert evaluation is disabled" in rendered
+
+
+def test_history_failure_is_rendered_as_compact_warning():
+    rendered = _render(
+        show_network_speed=True,
+        active_alerts=(),
+        history_warning="Database unavailable for this session.",
+    )
+
+    assert "History warning" in rendered
+    assert "Database unavailable for this session." in rendered
+
+
+def test_history_summary_and_recent_samples_render_clear_network_semantics(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=140))
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    summary = HistorySummary(
+        period_start=start,
+        period_end=start,
+        sample_count=1,
+        average_cpu_percent=20,
+        peak_cpu_percent=30,
+        average_memory_percent=40,
+        peak_memory_percent=50,
+        average_disk_percent=60,
+        peak_disk_percent=70,
+        peak_cpu_temperature_celsius=None,
+        peak_gpu_temperature_celsius=80,
+        observed_network_sent_change_bytes=None,
+        observed_network_received_change_bytes=2_048,
+        alert_event_count=1,
+    )
+    samples = (
+        HistoricalSample(start, 20, 40, 60, None, 1_024, 2_048, 2),
+    )
+
+    ui.print_history(summary, samples, "test.db")
+    rendered = output.getvalue()
+
+    assert "Observed sent counter change" in rendered
+    assert "Observed received counter change" in rendered
+    assert "2.00 KiB" in rendered
+    assert "Recent Samples" in rendered
+    assert "1.00 KiB/s" in rendered
+
+
+def test_persisted_alert_history_renders_events(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=120))
+    timestamp = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    event = AlertEvent(
+        timestamp=timestamp,
+        metric="cpu.usage",
+        label="CPU usage",
+        severity=AlertSeverity.WARNING,
+        transition=AlertTransition.OPENED,
+        current_value=70,
+        threshold=60,
+        unit="%",
+        message="CPU warning",
+    )
+
+    ui.print_alert_history((event,), "test.db")
+    rendered = output.getvalue()
+
+    assert "Persisted Alert Events" in rendered
+    assert "opened" in rendered
+    assert "CPU usage" in rendered
+    assert "70.0%" in rendered

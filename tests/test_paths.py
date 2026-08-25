@@ -19,6 +19,13 @@ def test_platform_directories_are_exposed_without_creating_them(monkeypatch, tmp
     assert not (tmp_path / "config").exists()
 
 
+def test_default_history_database_uses_platform_data_directory(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    monkeypatch.setattr(paths, "user_data_dir", lambda: data)
+
+    assert paths.default_history_database() == data / "systempulse.db"
+
+
 def test_platformdirs_receives_application_identity(monkeypatch):
     mock = Mock(return_value=SimpleNamespace())
     monkeypatch.setattr(paths, "PlatformDirs", mock)

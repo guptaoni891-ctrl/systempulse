@@ -6,7 +6,15 @@ from rich.table import Table
 from rich.text import Text
 
 from systempulse.config import AppConfig
-from systempulse.models import ActiveAlert, AlertSeverity, ProcessStats, SystemSnapshot
+from systempulse.models import (
+    ActiveAlert,
+    AlertEvent,
+    AlertSeverity,
+    HistoricalSample,
+    HistorySummary,
+    ProcessStats,
+    SystemSnapshot,
+)
 from systempulse.status import classify, classify_temperature
 from systempulse.utils import format_bytes, format_rate
 
@@ -29,6 +37,7 @@ def build_snapshot_view(
     *,
     show_network_speed: bool = False,
     active_alerts: tuple[ActiveAlert, ...] | None = None,
+    history_warning: str | None = None,
 ) -> Group:
     thresholds = config.thresholds
     display_timestamp = snapshot.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -125,6 +134,8 @@ def build_snapshot_view(
     renderables = [table, gpu_table]
     if active_alerts is not None:
         renderables.append(_build_alerts_view(active_alerts, enabled=config.alerts.enabled))
+    if history_warning is not None:
+        renderables.append(Panel(history_warning, title="History warning", style="yellow"))
     return Group(*renderables)
 
 
@@ -178,6 +189,111 @@ def print_processes(processes: list[ProcessStats]) -> None:
         )
 
     console.print(table)
+
+
+def print_history(
+    summary: HistorySummary,
+    samples: tuple[HistoricalSample, ...],
+    database: str,
+) -> None:
+    console.print(f"History database: [bold]{database}[/bold]")
+    table = Table(title="History Summary", expand=True)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+
+    if summary.sample_count == 0:
+        table.add_row("Samples", "0")
+    else:
+        table.add_row("Period start", _utc_text(summary.period_start))
+        table.add_row("Period end", _utc_text(summary.period_end))
+        table.add_row("Samples", str(summary.sample_count))
+        table.add_row("Average CPU", _percent(summary.average_cpu_percent))
+        table.add_row("Peak CPU", _percent(summary.peak_cpu_percent))
+        table.add_row("Average memory", _percent(summary.average_memory_percent))
+        table.add_row("Peak memory", _percent(summary.peak_memory_percent))
+        table.add_row("Average disk", _percent(summary.average_disk_percent))
+        table.add_row("Peak disk", _percent(summary.peak_disk_percent))
+        table.add_row(
+            "Peak CPU temperature",
+            _temperature(summary.peak_cpu_temperature_celsius),
+        )
+        table.add_row(
+            "Peak GPU temperature",
+            _temperature(summary.peak_gpu_temperature_celsius),
+        )
+        table.add_row(
+            "Observed sent counter change",
+            _optional_bytes(summary.observed_network_sent_change_bytes),
+        )
+        table.add_row(
+            "Observed received counter change",
+            _optional_bytes(summary.observed_network_received_change_bytes),
+        )
+        table.add_row("Alert events", str(summary.alert_event_count))
+    console.print(table)
+
+    recent = Table(title="Recent Samples", expand=True)
+    recent.add_column("UTC timestamp")
+    recent.add_column("CPU", justify="right")
+    recent.add_column("Memory", justify="right")
+    recent.add_column("Disk", justify="right")
+    recent.add_column("CPU temp", justify="right")
+    recent.add_column("Upload", justify="right")
+    recent.add_column("Download", justify="right")
+    recent.add_column("GPUs", justify="right")
+    if not samples:
+        recent.add_row("No samples", "—", "—", "—", "—", "—", "—", "—")
+    else:
+        for sample in samples:
+            recent.add_row(
+                _utc_text(sample.timestamp),
+                _percent(sample.cpu_usage_percent),
+                _percent(sample.memory_usage_percent),
+                _percent(sample.disk_usage_percent),
+                _temperature(sample.cpu_temperature_celsius),
+                format_rate(sample.upload_bytes_per_second),
+                format_rate(sample.download_bytes_per_second),
+                str(sample.gpu_count),
+            )
+    console.print(recent)
+
+
+def print_alert_history(events: tuple[AlertEvent, ...], database: str) -> None:
+    console.print(f"History database: [bold]{database}[/bold]")
+    table = Table(title="Persisted Alert Events", expand=True)
+    table.add_column("UTC timestamp")
+    table.add_column("Transition")
+    table.add_column("Severity")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    if not events:
+        table.add_row("No events", "—", "—", "—", "—")
+    else:
+        for event in events:
+            table.add_row(
+                _utc_text(event.timestamp),
+                event.transition.value,
+                event.severity.value,
+                event.label,
+                f"{event.current_value:.1f}{event.unit}",
+            )
+    console.print(table)
+
+
+def _utc_text(value) -> str:
+    return "Unavailable" if value is None else value.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _percent(value: float | None) -> str:
+    return "Unavailable" if value is None else f"{value:.1f}%"
+
+
+def _temperature(value: float | None) -> str:
+    return "Unavailable" if value is None else f"{value:.1f}°C"
+
+
+def _optional_bytes(value: int | None) -> str:
+    return "Unavailable" if value is None else format_bytes(value)
 
 
 def print_warning(message: str) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psutil
@@ -15,12 +16,19 @@ from systempulse.config import (
     load_config,
     set_config_value,
 )
+from systempulse.history import HistoryError, HistoryStore
 from systempulse.logger import save_snapshot
 from systempulse.monitor import live_monitor
 from systempulse.paths import resolve_config_path, user_config_path
 from systempulse.processes import get_top_processes
 from systempulse.service import MonitorService
-from systempulse.ui import console, print_processes, print_snapshot
+from systempulse.ui import (
+    console,
+    print_alert_history,
+    print_history,
+    print_processes,
+    print_snapshot,
+)
 from systempulse.utils import format_bytes, format_rate
 
 
@@ -50,9 +58,34 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("menu", help="Open the interactive menu.")
     subparsers.add_parser("snapshot", help="Show a one-time system snapshot.")
     subparsers.add_parser("live", help="Open the live dashboard.")
-    subparsers.add_parser(
+    alerts_parser = subparsers.add_parser(
         "alerts",
-        help="Show alert rules and the process-local runtime-state limitation.",
+        help="Show alert rules or persisted alert-event history.",
+    )
+    alerts_parser.add_argument(
+        "--history",
+        action="store_true",
+        help="Show persisted alert transitions instead of configured rules.",
+    )
+    alerts_parser.add_argument(
+        "--limit",
+        type=_positive_cli_integer,
+        default=20,
+        help="Maximum persisted alert events to show (default: 20).",
+    )
+
+    history_parser = subparsers.add_parser(
+        "history",
+        help="Show local SQLite metric history.",
+    )
+    period = history_parser.add_mutually_exclusive_group()
+    period.add_argument("--hours", type=_positive_cli_integer, help="Include recent hours.")
+    period.add_argument("--days", type=_positive_cli_integer, help="Include recent days.")
+    history_parser.add_argument(
+        "--limit",
+        type=_positive_cli_integer,
+        default=10,
+        help="Maximum recent samples to show (default: 10).",
     )
 
     process_parser = subparsers.add_parser("processes", help="Show top CPU processes.")
@@ -116,13 +149,74 @@ def _print_config(config: AppConfig) -> None:
 
 def _print_alert_rules(config: AppConfig) -> None:
     console.print(
-        "Alert state and event history are process-local and are shown by "
-        "[bold]systempulse live[/bold]. This command displays configured rules only."
+        "Active alert state is process-local and shown by [bold]systempulse live[/bold]. "
+        "Use [bold]systempulse alerts --history[/bold] for persisted transitions."
     )
     console.print_json(json.dumps(config.to_dict()["alerts"]))
 
 
-def interactive_menu(service: MonitorService) -> None:
+def _positive_cli_integer(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return result
+
+
+def _prepare_history(config: AppConfig) -> tuple[HistoryStore | None, str | None]:
+    if not config.history.enabled:
+        return None, None
+    try:
+        store = HistoryStore(config.history.database)
+        store.cleanup(config.history.retention_days)
+    except HistoryError as error:
+        return None, str(error)
+    return store, None
+
+
+def _history_since(
+    *,
+    hours: int | None,
+    days: int | None,
+    now: datetime | None = None,
+) -> datetime | None:
+    reference = datetime.now(UTC) if now is None else now.astimezone(UTC)
+    if hours is not None:
+        return reference - timedelta(hours=hours)
+    if days is not None:
+        return reference - timedelta(days=days)
+    return None
+
+
+def _show_history(config: AppConfig, args: argparse.Namespace) -> None:
+    if not config.history.enabled:
+        console.print("History is disabled in configuration.")
+        return
+    store = HistoryStore(config.history.database)
+    since = _history_since(hours=args.hours, days=args.days)
+    print_history(
+        store.query_summary(since=since),
+        store.recent_samples(since=since, limit=args.limit),
+        str(store.path),
+    )
+
+
+def _show_alert_history(config: AppConfig, limit: int) -> None:
+    if not config.history.enabled:
+        console.print("History is disabled in configuration.")
+        return
+    store = HistoryStore(config.history.database)
+    print_alert_history(store.recent_alert_events(limit=limit), str(store.path))
+
+
+def interactive_menu(
+    service: MonitorService,
+    *,
+    history_store: HistoryStore | None = None,
+    history_warning: str | None = None,
+) -> None:
     config = service.config
     while True:
         console.print(
@@ -141,7 +235,11 @@ def interactive_menu(service: MonitorService) -> None:
         if choice == "1":
             print_snapshot(service.sample(), config)
         elif choice == "2":
-            live_monitor(service)
+            live_monitor(
+                service,
+                history_store=history_store,
+                history_warning=history_warning,
+            )
         elif choice == "3":
             process_config = config.processes
             processes = get_top_processes(
@@ -189,14 +287,29 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
     command = args.command or "menu"
 
     if command == "menu":
-        interactive_menu(MonitorService(config, include_gpu=include_gpu))
+        history_store, history_warning = _prepare_history(config)
+        interactive_menu(
+            MonitorService(config, include_gpu=include_gpu),
+            history_store=history_store,
+            history_warning=history_warning,
+        )
     elif command == "snapshot":
         service = MonitorService(config, include_gpu=include_gpu)
         print_snapshot(service.sample(), config)
     elif command == "live":
-        live_monitor(MonitorService(config, include_gpu=include_gpu))
+        history_store, history_warning = _prepare_history(config)
+        live_monitor(
+            MonitorService(config, include_gpu=include_gpu),
+            history_store=history_store,
+            history_warning=history_warning,
+        )
     elif command == "alerts":
-        _print_alert_rules(config)
+        if args.history:
+            _show_alert_history(config, args.limit)
+        else:
+            _print_alert_rules(config)
+    elif command == "history":
+        _show_history(config, args)
     elif command == "processes":
         process_config = config.processes
         limit = args.limit or process_config.limit
@@ -226,6 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as error:
         console.print(f"[bold red]Configuration error:[/bold red] {error}")
         return 2
+    except HistoryError as error:
+        console.print(f"[bold red]History error:[/bold red] {error}")
+        return 3
     except (OSError, psutil.Error) as error:
         console.print(f"[bold red]SystemPulse error:[/bold red] {error}")
         return 1

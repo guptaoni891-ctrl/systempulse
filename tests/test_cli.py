@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, call
@@ -7,7 +8,8 @@ import pytest
 
 import systempulse.cli as cli
 from systempulse import __version__
-from systempulse.config import AppConfig, ConfigError, LoadedConfig
+from systempulse.config import AppConfig, ConfigError, HistoryConfig, LoadedConfig
+from systempulse.history import HistoryError
 from systempulse.models import NetworkSpeed, NetworkStats
 from systempulse.paths import ConfigPath
 
@@ -45,6 +47,11 @@ def test_build_parser_supports_existing_commands_and_global_options():
     assert parser.parse_args(["snapshot"]).command == "snapshot"
     assert parser.parse_args(["live"]).command == "live"
     assert parser.parse_args(["alerts"]).command == "alerts"
+    assert parser.parse_args(["alerts", "--history", "--limit", "5"]).history is True
+    history = parser.parse_args(["history", "--hours", "24", "--limit", "5"])
+    assert history.hours == 24
+    assert history.days is None
+    assert history.limit == 5
     assert parser.parse_args(["processes", "--limit", "10"]).limit == 10
     assert parser.parse_args(["network", "--speed"]).speed is True
     assert parser.parse_args(["save", "--output", "custom.csv"]).output == "custom.csv"
@@ -56,13 +63,21 @@ def test_no_command_dispatches_to_interactive_menu(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
     service, constructor = _mock_monitor_service(monkeypatch, config)
     menu = Mock()
+    history_store = Mock()
+    prepare_history = Mock(return_value=(history_store, None))
     monkeypatch.setattr(cli, "interactive_menu", menu)
+    monkeypatch.setattr(cli, "_prepare_history", prepare_history)
 
     result = cli.main([])
 
     assert result == 0
     constructor.assert_called_once_with(config, include_gpu=True)
-    menu.assert_called_once_with(service)
+    prepare_history.assert_called_once_with(config)
+    menu.assert_called_once_with(
+        service,
+        history_store=history_store,
+        history_warning=None,
+    )
 
 
 def test_snapshot_dispatches_collected_snapshot(monkeypatch):
@@ -83,12 +98,20 @@ def test_live_dispatches_without_starting_real_monitor(monkeypatch):
     config, _ = _mock_loaded_config(monkeypatch)
     service, constructor = _mock_monitor_service(monkeypatch, config)
     live_monitor = Mock()
+    history_store = Mock()
+    prepare_history = Mock(return_value=(history_store, None))
     monkeypatch.setattr(cli, "live_monitor", live_monitor)
+    monkeypatch.setattr(cli, "_prepare_history", prepare_history)
 
     assert cli.main(["live"]) == 0
 
     constructor.assert_called_once_with(config, include_gpu=True)
-    live_monitor.assert_called_once_with(service)
+    prepare_history.assert_called_once_with(config)
+    live_monitor.assert_called_once_with(
+        service,
+        history_store=history_store,
+        history_warning=None,
+    )
 
 
 def test_alerts_command_reports_rules_without_claiming_persistent_state(monkeypatch):
@@ -102,6 +125,111 @@ def test_alerts_command_reports_rules_without_claiming_persistent_state(monkeypa
 
     assert "process-local" in output.call_args.args[0]
     assert '"history_limit": 100' in print_json.call_args.args[0]
+
+
+def test_alerts_history_reads_persisted_events(monkeypatch, tmp_path):
+    config = AppConfig(history=HistoryConfig(database=str(tmp_path / "history.db")))
+    _mock_loaded_config(monkeypatch, config)
+    events = (object(),)
+    store = Mock(path=tmp_path / "history.db")
+    store.recent_alert_events.return_value = events
+    monkeypatch.setattr(cli, "HistoryStore", Mock(return_value=store))
+    output = Mock()
+    monkeypatch.setattr(cli, "print_alert_history", output)
+
+    assert cli.main(["alerts", "--history", "--limit", "7"]) == 0
+
+    store.recent_alert_events.assert_called_once_with(limit=7)
+    output.assert_called_once_with(events, str(store.path))
+
+
+def test_history_command_queries_summary_and_recent_samples(monkeypatch, tmp_path):
+    config = AppConfig(history=HistoryConfig(database=str(tmp_path / "history.db")))
+    _mock_loaded_config(monkeypatch, config)
+    since = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    summary = object()
+    samples = (object(),)
+    store = Mock(path=tmp_path / "history.db")
+    store.query_summary.return_value = summary
+    store.recent_samples.return_value = samples
+    monkeypatch.setattr(cli, "HistoryStore", Mock(return_value=store))
+    monkeypatch.setattr(cli, "_history_since", Mock(return_value=since))
+    output = Mock()
+    monkeypatch.setattr(cli, "print_history", output)
+
+    assert cli.main(["history", "--days", "7", "--limit", "5"]) == 0
+
+    cli._history_since.assert_called_once_with(hours=None, days=7)
+    store.query_summary.assert_called_once_with(since=since)
+    store.recent_samples.assert_called_once_with(since=since, limit=5)
+    output.assert_called_once_with(summary, samples, str(store.path))
+
+
+def test_history_time_filters_use_aware_utc_clock():
+    now = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+
+    assert cli._history_since(hours=24, days=None, now=now) == now - timedelta(hours=24)
+    assert cli._history_since(hours=None, days=7, now=now) == now - timedelta(days=7)
+    assert cli._history_since(hours=None, days=None, now=now) is None
+
+
+def test_disabled_history_commands_do_not_open_database(monkeypatch):
+    config = AppConfig(history=HistoryConfig(enabled=False))
+    _mock_loaded_config(monkeypatch, config)
+    constructor = Mock()
+    output = Mock()
+    monkeypatch.setattr(cli, "HistoryStore", constructor)
+    monkeypatch.setattr(cli.console, "print", output)
+
+    assert cli.main(["history"]) == 0
+    assert cli.main(["alerts", "--history"]) == 0
+
+    constructor.assert_not_called()
+    assert output.call_count == 2
+
+
+def test_prepare_history_initializes_custom_path_and_cleans_up_once(monkeypatch, tmp_path):
+    config = AppConfig(
+        history=HistoryConfig(database=str(tmp_path / "custom.db"), retention_days=14)
+    )
+    store = Mock()
+    constructor = Mock(return_value=store)
+    monkeypatch.setattr(cli, "HistoryStore", constructor)
+
+    returned, warning = cli._prepare_history(config)
+
+    assert returned is store
+    assert warning is None
+    constructor.assert_called_once_with(str(tmp_path / "custom.db"))
+    store.cleanup.assert_called_once_with(14)
+
+
+def test_prepare_history_returns_one_controlled_warning_on_failure(monkeypatch, tmp_path):
+    config = AppConfig(history=HistoryConfig(database=str(tmp_path / "broken.db")))
+    monkeypatch.setattr(
+        cli,
+        "HistoryStore",
+        Mock(side_effect=HistoryError("database unavailable")),
+    )
+
+    store, warning = cli._prepare_history(config)
+
+    assert store is None
+    assert warning == "database unavailable"
+
+
+def test_history_error_has_stable_exit_code(monkeypatch):
+    _mock_loaded_config(monkeypatch)
+    monkeypatch.setattr(
+        cli,
+        "HistoryStore",
+        Mock(side_effect=HistoryError("corrupt database")),
+    )
+    output = Mock()
+    monkeypatch.setattr(cli.console, "print", output)
+
+    assert cli.main(["history"]) == 3
+    assert "History error" in output.call_args.args[0]
 
 
 def test_processes_uses_cli_limit_and_configured_sample_interval(monkeypatch):
@@ -287,6 +415,19 @@ def test_config_set_forwards_nested_alert_setting(monkeypatch, tmp_path):
     assert cli.main(["config", "set", "alerts.cpu.warning", "70"]) == 0
 
     set_value.assert_called_once_with(path, "alerts.cpu.warning", "70")
+
+
+def test_config_set_forwards_history_setting(monkeypatch, tmp_path):
+    path = tmp_path / "config.json"
+    resolution = ConfigPath(path, "user", True)
+    monkeypatch.setattr(cli, "resolve_config_path", Mock(return_value=resolution))
+    set_value = Mock(return_value=AppConfig())
+    monkeypatch.setattr(cli, "set_config_value", set_value)
+    monkeypatch.setattr(cli.console, "print", Mock())
+
+    assert cli.main(["config", "set", "history.retention_days", "14"]) == 0
+
+    set_value.assert_called_once_with(path, "history.retention_days", "14")
 
 
 def test_configuration_error_has_stable_exit_code(monkeypatch):

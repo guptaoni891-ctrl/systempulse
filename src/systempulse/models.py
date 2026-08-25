@@ -149,6 +149,57 @@ class ActiveAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class HistorySummary:
+    period_start: datetime | None
+    period_end: datetime | None
+    sample_count: int
+    average_cpu_percent: float | None
+    peak_cpu_percent: float | None
+    average_memory_percent: float | None
+    peak_memory_percent: float | None
+    average_disk_percent: float | None
+    peak_disk_percent: float | None
+    peak_cpu_temperature_celsius: float | None
+    peak_gpu_temperature_celsius: float | None
+    observed_network_sent_change_bytes: int | None
+    observed_network_received_change_bytes: int | None
+    alert_event_count: int
+
+    def __post_init__(self) -> None:
+        if self.period_start is not None:
+            object.__setattr__(
+                self,
+                "period_start",
+                _normalized_utc(self.period_start, "HistorySummary period_start"),
+            )
+        if self.period_end is not None:
+            object.__setattr__(
+                self,
+                "period_end",
+                _normalized_utc(self.period_end, "HistorySummary period_end"),
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalSample:
+    timestamp: datetime
+    cpu_usage_percent: float
+    memory_usage_percent: float
+    disk_usage_percent: float
+    cpu_temperature_celsius: float | None
+    upload_bytes_per_second: float
+    download_bytes_per_second: float
+    gpu_count: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "timestamp",
+            _normalized_utc(self.timestamp, "HistoricalSample timestamp"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ProcessStats:
     pid: int
     name: str

@@ -9,6 +9,7 @@ from platformdirs import PlatformDirs
 
 APP_NAME = "SystemPulse"
 CONFIG_FILENAME = "config.json"
+HISTORY_DATABASE_FILENAME = "systempulse.db"
 CONFIG_ENV_VAR = "SYSTEMPULSE_CONFIG"
 
 
@@ -33,6 +34,10 @@ def user_config_path() -> Path:
 
 def user_data_dir() -> Path:
     return Path(_platform_dirs().user_data_dir)
+
+
+def default_history_database() -> Path:
+    return user_data_dir() / HISTORY_DATABASE_FILENAME
 
 
 def user_state_dir() -> Path:
