@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psutil
+from rich.markup import escape
 from rich.prompt import Prompt
 
 from systempulse import __version__
 from systempulse.config import (
     AppConfig,
     ConfigError,
+    PrometheusConfig,
     initialize_config,
     load_config,
     set_config_value,
 )
+from systempulse.exporter import ExporterError, serve_exporter
 from systempulse.history import HistoryError, HistoryStore
 from systempulse.logger import save_snapshot
 from systempulse.monitor import live_monitor
@@ -101,6 +105,26 @@ def build_parser() -> argparse.ArgumentParser:
     save_parser = subparsers.add_parser("save", help="Save a system snapshot to CSV.")
     save_parser.add_argument("--output", help="Override the configured CSV path.")
 
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Expose the latest SystemPulse sample for Prometheus.",
+    )
+    serve_parser.add_argument(
+        "--host",
+        type=_prometheus_cli_host,
+        help="HTTP bind host (default: configured value or 127.0.0.1).",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=_prometheus_cli_port,
+        help="HTTP bind port (default: configured value or 9100).",
+    )
+    serve_parser.add_argument(
+        "--interval",
+        type=_positive_cli_number,
+        help="System sampling interval in seconds (default: configured value or 5).",
+    )
+
     subparsers.add_parser(
         "show-config",
         help="Print the effective configuration (legacy alias for 'config show').",
@@ -163,6 +187,34 @@ def _positive_cli_integer(value: str) -> int:
     if result <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return result
+
+
+def _positive_cli_number(value: str) -> float:
+    try:
+        result = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive finite number") from error
+    if not math.isfinite(result) or result <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return result
+
+
+def _prometheus_cli_host(value: str) -> str:
+    try:
+        return PrometheusConfig(host=value).host
+    except ConfigError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _prometheus_cli_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer between 1 and 65535") from error
+    try:
+        return PrometheusConfig(port=port).port
+    except ConfigError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
 
 
 def _prepare_history(config: AppConfig) -> tuple[HistoryStore | None, str | None]:
@@ -323,6 +375,14 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
         _show_network(MonitorService(config, include_gpu=False), args.speed)
     elif command == "save":
         _save(MonitorService(config, include_gpu=include_gpu), args.output)
+    elif command == "serve":
+        prometheus = config.prometheus
+        serve_exporter(
+            MonitorService(config, include_gpu=include_gpu),
+            host=args.host if args.host is not None else prometheus.host,
+            port=args.port if args.port is not None else prometheus.port,
+            interval=args.interval if args.interval is not None else prometheus.interval,
+        )
     elif command == "show-config":
         _print_config(config)
 
@@ -342,6 +402,9 @@ def main(argv: list[str] | None = None) -> int:
     except HistoryError as error:
         console.print(f"[bold red]History error:[/bold red] {error}")
         return 3
+    except ExporterError as error:
+        console.print(f"[bold red]Prometheus exporter error:[/bold red] {escape(str(error))}")
+        return 1
     except (OSError, psutil.Error) as error:
         console.print(f"[bold red]SystemPulse error:[/bold red] {error}")
         return 1

@@ -8,7 +8,14 @@ import pytest
 
 import systempulse.cli as cli
 from systempulse import __version__
-from systempulse.config import AppConfig, ConfigError, HistoryConfig, LoadedConfig
+from systempulse.config import (
+    AppConfig,
+    ConfigError,
+    HistoryConfig,
+    LoadedConfig,
+    PrometheusConfig,
+)
+from systempulse.exporter import PrometheusDependencyError
 from systempulse.history import HistoryError
 from systempulse.models import NetworkSpeed, NetworkStats
 from systempulse.paths import ConfigPath
@@ -55,6 +62,10 @@ def test_build_parser_supports_existing_commands_and_global_options():
     assert parser.parse_args(["processes", "--limit", "10"]).limit == 10
     assert parser.parse_args(["network", "--speed"]).speed is True
     assert parser.parse_args(["save", "--output", "custom.csv"]).output == "custom.csv"
+    serve = parser.parse_args(
+        ["serve", "--host", "localhost", "--port", "9200", "--interval", "2.5"]
+    )
+    assert (serve.host, serve.port, serve.interval) == ("localhost", 9200, 2.5)
     assert parser.parse_args(["show-config"]).command == "show-config"
     assert parser.parse_args(["config", "show"]).config_command == "show"
 
@@ -503,3 +514,78 @@ def test_invalid_command_exits_with_argparse_error(monkeypatch, capsys):
     assert error.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
     load_config.assert_not_called()
+
+
+def test_serve_uses_prometheus_config_and_monitor_service(monkeypatch):
+    config = AppConfig(
+        prometheus=PrometheusConfig(host="localhost", port=9200, interval=3.0)
+    )
+    _mock_loaded_config(monkeypatch, config)
+    service, constructor = _mock_monitor_service(monkeypatch, config)
+    serve = Mock()
+    monkeypatch.setattr(cli, "serve_exporter", serve)
+
+    assert cli.main(["serve"]) == 0
+
+    constructor.assert_called_once_with(config, include_gpu=True)
+    serve.assert_called_once_with(service, host="localhost", port=9200, interval=3.0)
+
+
+def test_serve_cli_values_override_prometheus_config(monkeypatch):
+    config = AppConfig(
+        prometheus=PrometheusConfig(host="config-host", port=9200, interval=3.0)
+    )
+    _mock_loaded_config(monkeypatch, config)
+    service, _ = _mock_monitor_service(monkeypatch, config)
+    serve = Mock()
+    monkeypatch.setattr(cli, "serve_exporter", serve)
+
+    assert cli.main(
+        ["--no-gpu", "serve", "--host", "127.0.0.2", "--port", "9300", "--interval", "1"]
+    ) == 0
+
+    serve.assert_called_once_with(service, host="127.0.0.2", port=9300, interval=1.0)
+    cli.MonitorService.assert_called_once_with(config, include_gpu=False)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["serve", "--port", "0"],
+        ["serve", "--port", "65536"],
+        ["serve", "--interval", "0"],
+        ["serve", "--interval", "nan"],
+        ["serve", "--host", "http://localhost"],
+    ],
+)
+def test_serve_rejects_invalid_cli_values(arguments):
+    with pytest.raises(SystemExit) as error:
+        cli.main(arguments)
+
+    assert error.value.code == 2
+
+
+def test_missing_prometheus_extra_is_an_actionable_operational_error(monkeypatch):
+    config, _ = _mock_loaded_config(monkeypatch)
+    _mock_monitor_service(monkeypatch, config)
+    monkeypatch.setattr(
+        cli,
+        "serve_exporter",
+        Mock(side_effect=PrometheusDependencyError('install "systempulse[prometheus]"')),
+    )
+    output = Mock()
+    monkeypatch.setattr(cli.console, "print", output)
+
+    assert cli.main(["serve"]) == 1
+    message = output.call_args.args[0]
+    assert "Prometheus exporter error" in message
+    assert "systempulse\\[prometheus]" in message
+
+
+def test_prometheus_extra_hint_survives_rich_markup(capsys):
+    cli.console.print(
+        f"[bold red]Prometheus exporter error:[/bold red] "
+        f"{cli.escape('Install systempulse[prometheus].')}"
+    )
+
+    assert "systempulse[prometheus]" in capsys.readouterr().out

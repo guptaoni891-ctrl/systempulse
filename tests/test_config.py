@@ -12,6 +12,7 @@ from systempulse.config import (
     AppConfig,
     ConfigError,
     HistoryConfig,
+    PrometheusConfig,
     initialize_config,
     load_config,
     set_config_value,
@@ -449,3 +450,68 @@ def test_config_writes_use_atomic_replacement(monkeypatch, tmp_path):
     assert Path(temporary).parent == path.parent
     assert Path(destination) == path.resolve()
     assert not Path(temporary).exists()
+
+
+def test_prometheus_defaults_are_local_only_and_typed():
+    prometheus = AppConfig().prometheus
+
+    assert prometheus == PrometheusConfig(host="127.0.0.1", port=9100, interval=5.0)
+    assert DEFAULT_CONFIG.to_dict()["prometheus"] == {
+        "host": "127.0.0.1",
+        "port": 9100,
+        "interval": 5.0,
+    }
+
+
+def test_partial_prometheus_configuration_deep_merges_defaults(tmp_path):
+    path = _write_json(tmp_path / "config.json", {"prometheus": {"port": 9200}})
+
+    prometheus = load_config(path).config.prometheus
+
+    assert prometheus == PrometheusConfig(host="127.0.0.1", port=9200, interval=5.0)
+
+
+@pytest.mark.parametrize("port", [True, 1.5, "9100", 0, -1, 65_536])
+def test_prometheus_port_validation_rejects_invalid_values(tmp_path, port):
+    path = _write_json(tmp_path / "config.json", {"prometheus": {"port": port}})
+
+    with pytest.raises(ConfigError, match="prometheus.port"):
+        load_config(path)
+
+
+@pytest.mark.parametrize("interval", [True, "5", 0, -1, float("inf")])
+def test_prometheus_interval_validation_rejects_invalid_values(interval):
+    with pytest.raises(ConfigError, match="prometheus.interval"):
+        PrometheusConfig(interval=interval)
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["", "  ", " local host", "local host", "http://localhost", "host/path", "a\\b"],
+)
+def test_prometheus_host_validation_rejects_malformed_values(host):
+    with pytest.raises(ConfigError, match="prometheus.host"):
+        PrometheusConfig(host=host)
+
+
+def test_prometheus_host_validation_accepts_hostnames_ipv4_and_ipv6():
+    assert PrometheusConfig(host="localhost").host == "localhost"
+    assert PrometheusConfig(host="0.0.0.0").host == "0.0.0.0"
+    assert PrometheusConfig(host="::1").host == "::1"
+
+
+def test_unknown_prometheus_fields_are_rejected(tmp_path):
+    path = _write_json(tmp_path / "config.json", {"prometheus": {"enabled": True}})
+
+    with pytest.raises(ConfigError, match="Unknown prometheus setting"):
+        load_config(path)
+
+
+def test_config_set_supports_prometheus_values(tmp_path):
+    path = tmp_path / "config.json"
+
+    set_config_value(path, "prometheus.host", "0.0.0.0")
+    set_config_value(path, "prometheus.port", "9200")
+    config = set_config_value(path, "prometheus.interval", "2")
+
+    assert config.prometheus == PrometheusConfig(host="0.0.0.0", port=9200, interval=2.0)

@@ -245,6 +245,32 @@ class HistoryConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PrometheusConfig:
+    host: str = "127.0.0.1"
+    port: int = 9100
+    interval: float = 5.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.host, str) or not self.host.strip():
+            raise ConfigError("prometheus.host must be a non-empty string.")
+        if self.host != self.host.strip() or any(character.isspace() for character in self.host):
+            raise ConfigError("prometheus.host must not contain whitespace.")
+        if "://" in self.host or "/" in self.host or "\\" in self.host or "\x00" in self.host:
+            raise ConfigError(
+                "prometheus.host must be a hostname or IP address, not a URL or path."
+            )
+        if isinstance(self.port, bool) or not isinstance(self.port, int):
+            raise ConfigError("prometheus.port must be an integer.")
+        if not 1 <= self.port <= 65_535:
+            raise ConfigError("prometheus.port must be between 1 and 65535.")
+        object.__setattr__(
+            self,
+            "interval",
+            _positive_number(self.interval, "prometheus.interval"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
@@ -253,6 +279,7 @@ class AppConfig:
     temperature: TemperatureConfig = field(default_factory=TemperatureConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
+    prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> AppConfig:
@@ -267,6 +294,7 @@ class AppConfig:
                 "temperature",
                 "alerts",
                 "history",
+                "prometheus",
             },
             "top-level",
         )
@@ -315,6 +343,12 @@ class AppConfig:
             history_raw,
             {"enabled", "database", "retention_days"},
             "history",
+        )
+        prometheus_raw = _mapping(root.get("prometheus", {}), "prometheus")
+        _reject_unknown(
+            prometheus_raw,
+            {"host", "port", "interval"},
+            "prometheus",
         )
 
         def alert_rule(name: str, default: AlertRuleConfig) -> AlertRuleConfig:
@@ -386,6 +420,11 @@ class AppConfig:
                     "retention_days", defaults.history.retention_days
                 ),
             ),
+            prometheus=PrometheusConfig(
+                host=prometheus_raw.get("host", defaults.prometheus.host),
+                port=prometheus_raw.get("port", defaults.prometheus.port),
+                interval=prometheus_raw.get("interval", defaults.prometheus.interval),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -438,6 +477,11 @@ class AppConfig:
                 "enabled": self.history.enabled,
                 "database": self.history.database,
                 "retention_days": self.history.retention_days,
+            },
+            "prometheus": {
+                "host": self.prometheus.host,
+                "port": self.prometheus.port,
+                "interval": self.prometheus.interval,
             },
         }
 
@@ -542,6 +586,9 @@ SETTING_PATHS: dict[str, tuple[str, ...]] = {
     "history.enabled": ("history", "enabled"),
     "history.database": ("history", "database"),
     "history.retention_days": ("history", "retention_days"),
+    "prometheus.host": ("prometheus", "host"),
+    "prometheus.port": ("prometheus", "port"),
+    "prometheus.interval": ("prometheus", "interval"),
 }
 
 for _rule_name in (

@@ -17,6 +17,7 @@ A modular cross-platform terminal system monitor built with Python. SystemPulse 
 - Live terminal dashboard powered by Rich
 - CSV history logging
 - Local SQLite metric and alert-event history
+- Optional Prometheus exporter backed by the latest in-memory sample
 - Configurable warning and critical thresholds
 - Stateful live alerts with duration, hysteresis, cooldown, and per-GPU rules
 - Graceful fallbacks when temperature sensors or `nvidia-smi` are unavailable
@@ -70,6 +71,14 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
+For an installed release with Prometheus exporter support:
+
+```bash
+pip install "systempulse[prometheus]"
+# or
+pipx install "systempulse[prometheus]"
+```
+
 ## Usage
 
 Open the interactive menu:
@@ -104,6 +113,18 @@ systempulse history
 systempulse history --hours 24 --limit 20
 systempulse history --days 7
 ```
+
+Expose the latest sample at `http://127.0.0.1:9100/metrics`:
+
+```bash
+systempulse serve
+systempulse serve --host 127.0.0.1 --port 9100 --interval 5
+```
+
+The default bind is local-only. Binding to `0.0.0.0` or another network interface is an explicit
+choice because host metrics can reveal information about the machine. The sampling interval controls
+how often SystemPulse polls the host; it is independent of Prometheus's scrape interval. Scraping
+`/metrics` only reads the latest in-memory snapshot and never invokes `psutil` or `nvidia-smi`.
 
 Show the top CPU-consuming processes:
 
@@ -143,6 +164,8 @@ systempulse config set alerts.cpu.warning 80
 systempulse config set alerts.cpu.duration 30
 systempulse config set history.retention_days 14
 systempulse config set history.database /custom/path/systempulse.db
+systempulse config set prometheus.port 9200
+systempulse config set prometheus.interval 2
 ```
 
 `config init` refuses to replace an existing file. Use `systempulse config init --force`
@@ -210,8 +233,41 @@ default, retains 30 days, and stores `systempulse.db` under the platform-specifi
 data directory selected by `platformdirs`. A custom database path may be absolute or relative to the
 process working directory. Retention must be a positive number of days.
 
+The `prometheus` section contains `host`, `port`, and `interval`, defaulting to `127.0.0.1`, `9100`,
+and 5 seconds. `systempulse serve --host/--port/--interval` overrides the corresponding loaded
+configuration for that invocation. Configuration-file precedence remains as listed above; command
+options are the final exporter-only override. Host validation is local and performs no DNS lookup.
+
 An explicitly selected or discovered malformed file is reported as an error. A missing explicit file
 is also an error; when no file is selected or discovered, built-in defaults are used silently.
+
+## Prometheus Exporter
+
+SystemPulse exports numeric base units with the `systempulse_` prefix. CPU, memory, disk, and GPU
+usage percentages are converted at the exporter boundary into ratios from 0 to 1. Memory and disk
+capacities use bytes, rates use bytes per second, temperatures use Celsius, power uses watts, and
+timestamps use Unix seconds. Raw network totals are exposed as counters so Prometheus can recognize
+an operating-system counter reset; SystemPulse's calculated network rates remain gauges.
+
+Multiple GPUs share metric names and use only a bounded snapshot-order label such as `gpu="0"`.
+GPU names, processes, diagnostics, and error strings are not labels. CPU temperature and GPU series
+are omitted when unavailable rather than reported as zero; a GPU that disappears from the latest
+snapshot also disappears from exposition. `systempulse_up`, the latest successful sample timestamp,
+sample age, and a sampling-error counter describe exporter health. After a sampling failure, the
+last valid core sample remains available while `systempulse_up` is 0 and sample age keeps increasing.
+
+SystemPulse's SQLite history and AlertEngine remain separate. The exporter neither reads nor writes
+history, and it does not expose per-process or historical-alert metrics.
+
+Minimal Prometheus scrape configuration:
+
+```yaml
+scrape_configs:
+  - job_name: systempulse
+    static_configs:
+      - targets:
+          - "127.0.0.1:9100"
+```
 
 ## CPU Temperature Notes
 
@@ -256,7 +312,9 @@ SystemPulse separates responsibilities across modules: `collector.py` collects l
 and lightweight optional-collector diagnostics. `ui.py` only renders samples, `logger.py` writes a
 sample to CSV, `alerts.py` evaluates snapshots and owns process-local alert state, `monitor.py`
 schedules the live terminal display and invokes the alert engine, `history.py` owns SQLite schema,
-transactions, retention, and queries, and `cli.py` handles commands.
+transactions, retention, and queries, `exporter.py` independently samples `MonitorService` into a
+lock-protected latest-snapshot state and exposes it through a dedicated Prometheus registry, and
+`cli.py` handles commands.
 
 The live display is scheduled against monotonic target ticks. Its first sample is immediate; each
 later sample starts at the configured tick. If collection runs past one or more ticks, those ticks are
