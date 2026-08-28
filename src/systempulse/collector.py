@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import math
 import os
 import platform
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import psutil
 
-from systempulse.gpu import get_gpu_stats
-from systempulse.models import NetworkStats, SystemSnapshot
+from systempulse.config import AppConfig
+from systempulse.models import CollectionDiagnostic, CoreMetrics, DiagnosticKind
+from systempulse.network import get_network_totals
 
 
 def _get_disk_root() -> str:
@@ -25,44 +26,101 @@ def _get_disk_root() -> str:
     return "/"
 
 
-def _get_cpu_temperature(config: dict[str, Any]) -> float | None:
-    """Return a CPU temperature when psutil exposes one on this platform."""
+def _diagnostic(kind: DiagnosticKind, message: str) -> CollectionDiagnostic:
+    return CollectionDiagnostic(collector="cpu_temperature", kind=kind, message=message)
+
+
+def _temperature_value(reading: Any) -> float:
+    value = float(reading.current)
+    if not math.isfinite(value):
+        raise ValueError("temperature is not finite")
+    return value
+
+
+def _collect_cpu_temperature(
+    config: AppConfig,
+) -> tuple[float | None, tuple[CollectionDiagnostic, ...]]:
+    sensor_reader = getattr(psutil, "sensors_temperatures", None)
+    if sensor_reader is None:
+        return None, (
+            _diagnostic(
+                DiagnosticKind.UNAVAILABLE,
+                "CPU temperature sensors are not supported on this platform.",
+            ),
+        )
     try:
-        sensors = psutil.sensors_temperatures()
-    except (AttributeError, NotImplementedError, OSError):
-        return None
+        sensors = sensor_reader()
+    except (AttributeError, NotImplementedError):
+        return None, (
+            _diagnostic(
+                DiagnosticKind.UNAVAILABLE,
+                "CPU temperature sensors are not supported on this platform.",
+            ),
+        )
+    except OSError as error:
+        return None, (
+            _diagnostic(
+                DiagnosticKind.EXECUTION_FAILED,
+                f"CPU temperature sensors could not be read: {error}",
+            ),
+        )
 
     if not sensors:
-        return None
+        return None, (
+            _diagnostic(DiagnosticKind.UNAVAILABLE, "No CPU temperature sensors were reported."),
+        )
 
-    preferred = config["temperature"]["preferred_sensors"]
-    for sensor_name in preferred:
+    selected_reading = None
+    for sensor_name in config.temperature.preferred_sensors:
         readings = sensors.get(sensor_name)
         if readings:
-            return float(readings[0].current)
+            selected_reading = readings[0]
+            break
 
-    for readings in sensors.values():
-        for reading in readings:
-            label = (reading.label or "").lower()
-            if "package" in label or "tctl" in label or "cpu" in label:
-                return float(reading.current)
+    if selected_reading is None:
+        for readings in sensors.values():
+            for reading in readings:
+                label = (getattr(reading, "label", "") or "").lower()
+                if "package" in label or "tctl" in label or "cpu" in label:
+                    selected_reading = reading
+                    break
+            if selected_reading is not None:
+                break
 
-    return None
+    if selected_reading is None:
+        return None, (
+            _diagnostic(
+                DiagnosticKind.UNAVAILABLE,
+                "No reading could be identified as a CPU temperature.",
+            ),
+        )
+
+    try:
+        return _temperature_value(selected_reading), ()
+    except (AttributeError, TypeError, ValueError) as error:
+        return None, (
+            _diagnostic(
+                DiagnosticKind.MALFORMED_RESULT,
+                f"CPU temperature sensor returned an invalid value: {error}",
+            ),
+        )
 
 
-def collect_system_snapshot(
-    config: dict[str, Any],
-    *,
-    include_gpu: bool = True,
-) -> SystemSnapshot:
-    cpu_interval = float(config["monitor"]["cpu_sample_interval"])
-    cpu_usage = psutil.cpu_percent(interval=max(cpu_interval, 0.0))
+def _get_cpu_temperature(config: AppConfig) -> float | None:
+    """Return only the temperature value for compatibility with the v1 helper."""
+    temperature, _ = _collect_cpu_temperature(config)
+    return temperature
+
+
+def collect_core_metrics(config: AppConfig) -> CoreMetrics:
+    """Collect one set of non-GPU metrics without assigning clocks or network rates."""
+    cpu_usage = psutil.cpu_percent(interval=config.monitor.cpu_sample_interval)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage(_get_disk_root())
-    network = psutil.net_io_counters(pernic=False, nowrap=True)
+    temperature, diagnostics = _collect_cpu_temperature(config)
+    network = get_network_totals()
 
-    return SystemSnapshot(
-        timestamp=datetime.now().replace(microsecond=0),
+    return CoreMetrics(
         cpu_usage_percent=float(cpu_usage),
         ram_usage_percent=float(memory.percent),
         ram_used_bytes=int(memory.used),
@@ -70,10 +128,7 @@ def collect_system_snapshot(
         disk_usage_percent=float(disk.percent),
         disk_used_bytes=int(disk.used),
         disk_total_bytes=int(disk.total),
-        cpu_temperature_celsius=_get_cpu_temperature(config),
-        network=NetworkStats(
-            bytes_sent=int(network.bytes_sent),
-            bytes_received=int(network.bytes_recv),
-        ),
-        gpus=get_gpu_stats() if include_gpu else (),
+        cpu_temperature_celsius=temperature,
+        network=network,
+        diagnostics=diagnostics,
     )

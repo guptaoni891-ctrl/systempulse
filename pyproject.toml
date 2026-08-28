@@ -1,26 +1,63 @@
 [build-system]
-requires = ["setuptools>=75", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "systempulse"
-version = "1.1.0"
-description = "A cross-platform terminal system monitor for CPU, memory, disk, network, processes, temperature sensors, NVIDIA GPU metrics, and CSV logging."
+dynamic = ["version"]
+description = "A lightweight cross-platform terminal system monitor and observability CLI."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Anubhav Gupta" }
 ]
+keywords = [
+  "monitoring",
+  "observability",
+  "system-monitor",
+  "terminal",
+  "cli"
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Monitoring"
+]
 dependencies = [
+  "platformdirs>=4.3,<5",
   "psutil>=7.0,<8",
   "rich>=13.9,<15"
 ]
 
+[project.urls]
+Homepage = "https://github.com/guptaoni891-ctrl/systempulse"
+Repository = "https://github.com/guptaoni891-ctrl/systempulse"
+Issues = "https://github.com/guptaoni891-ctrl/systempulse/issues"
+Changelog = "https://github.com/guptaoni891-ctrl/systempulse/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
+prometheus = [
+  "prometheus-client>=0.24,<1"
+]
 dev = [
+  "build>=1.2,<2",
+  "mypy>=1.17,<1.19",
+  "pre-commit>=4.5,<5",
+  "prometheus-client>=0.24,<1",
   "pytest>=8.3,<10",
-  "ruff>=0.9,<1"
+  "pytest-cov>=7,<8",
+  "ruff>=0.9,<1",
+  "twine>=6.2,<8",
+  "types-psutil>=7,<8"
 ]
 
 [project.scripts]
@@ -28,6 +65,9 @@ systempulse = "systempulse.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "systempulse.__version__" }
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -40,3 +80,34 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+branch = true
+source = ["systempulse"]
+
+[tool.coverage.report]
+fail_under = 90
+precision = 1
+show_missing = true
+exclude_also = [
+  "if __name__ == .__main__.:",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/systempulse"]
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+warn_unused_ignores = true
