@@ -6,7 +6,7 @@ import systempulse
 
 
 def test_runtime_version_matches_installed_distribution_metadata():
-    assert systempulse.__version__ == "1.1.0"
+    assert systempulse.__version__ == "2.0.0"
     assert importlib.metadata.version("systempulse") == systempulse.__version__
 
 

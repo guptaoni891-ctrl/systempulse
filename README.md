@@ -14,7 +14,7 @@ small Prometheus target on a workstation or server.
 
 ## Dashboard
 
-![SystemPulse live dashboard showing CPU, RAM, disk, network, and NVIDIA GPU metrics](docs/dashboard.png)
+![SystemPulse live dashboard showing CPU, RAM, disk, network, and NVIDIA GPU metrics](https://raw.githubusercontent.com/guptaoni891-ctrl/systempulse/main/docs/dashboard.png)
 
 The existing capture accurately represents the core dashboard layout. It predates the current
 active-alert panel, so a present-day `systempulse live` session includes an additional Alerts

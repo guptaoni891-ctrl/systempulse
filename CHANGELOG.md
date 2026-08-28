@@ -6,8 +6,7 @@ for release planning.
 
 ## [Unreleased]
 
-The work below is the planned SystemPulse 2.0 change set. It has not been released, tagged, or
-published to PyPI, and package metadata intentionally remains at version 1.1.0.
+## [2.0.0] - 2026-08-28
 
 ### Added
 

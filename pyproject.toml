@@ -41,6 +41,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/guptaoni891-ctrl/systempulse"
 Repository = "https://github.com/guptaoni891-ctrl/systempulse"
+Issues = "https://github.com/guptaoni891-ctrl/systempulse/issues"
+Changelog = "https://github.com/guptaoni891-ctrl/systempulse/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 prometheus = [
