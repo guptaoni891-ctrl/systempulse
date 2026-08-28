@@ -1,369 +1,237 @@
 # SystemPulse
 
-A modular cross-platform terminal system monitor built with Python. SystemPulse provides a polished Rich dashboard for monitoring CPU, memory, disk, network, running processes, optional CPU temperature sensors, and optional NVIDIA GPU metrics on Windows, macOS, and Linux.
+[![CI](https://github.com/guptaoni891-ctrl/systempulse/actions/workflows/tests.yml/badge.svg)](https://github.com/guptaoni891-ctrl/systempulse/actions/workflows/tests.yml)
+![Python 3.11–3.13](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-3776AB?logo=python&logoColor=white)
+[![License: MIT](https://img.shields.io/github/license/guptaoni891-ctrl/systempulse)](LICENSE)
 
-![SystemPulse live dashboard](docs/dashboard.png)
+SystemPulse is a lightweight cross-platform system monitoring and observability CLI for Windows,
+macOS, and Linux. It combines a Rich terminal dashboard with configurable alerts, local SQLite
+history, CSV export, and an optional Prometheus endpoint—without requiring a background daemon or
+web application.
 
-## Features
+Use it for an immediate view of host health, a live terminal dashboard, local metric history, or a
+small Prometheus target on a workstation or server.
 
-- Real-time CPU usage
-- RAM usage and capacity
-- System-disk usage and capacity
-- CPU temperature when exposed by the operating system and `psutil`
-- Network upload and download speed
-- Total network traffic since boot
-- Top CPU-consuming processes
-- NVIDIA GPU usage, temperature, VRAM, and power through `nvidia-smi`
-- Live terminal dashboard powered by Rich
-- CSV history logging
-- Local SQLite metric and alert-event history
-- Optional Prometheus exporter backed by the latest in-memory sample
-- Configurable warning and critical thresholds
-- Stateful live alerts with duration, hysteresis, cooldown, and per-GPU rules
-- Graceful fallbacks when temperature sensors or `nvidia-smi` are unavailable
-- Automated tests and linting on Windows, macOS, and Linux
+## Dashboard
 
-## Platform Support
+![SystemPulse live dashboard showing CPU, RAM, disk, network, and NVIDIA GPU metrics](docs/dashboard.png)
 
-| Platform | Core metrics | CPU temperature | NVIDIA GPU |
-|---|---|---|---|
-| Windows 10/11 | Yes | Shown when available; otherwise `Unavailable` | Yes, when `nvidia-smi` is installed |
-| macOS | Yes | Shown when available; otherwise `Unavailable` | Usually unavailable on modern Macs |
-| Linux | Yes | Yes when supported sensors are exposed | Yes, when `nvidia-smi` is installed |
+The existing capture accurately represents the core dashboard layout. It predates the current
+active-alert panel, so a present-day `systempulse live` session includes an additional Alerts
+section. See [docs/demo.md](docs/demo.md) for a safe, reproducible demo-capture workflow.
 
-Core monitoring—CPU, RAM, disk, network, processes, logging, and the terminal UI—works without temperature or NVIDIA support.
+## Quick start
 
-## Tech Stack
-
-- Python
-- psutil
-- Rich
-- argparse
-- pytest
-- Ruff
-- GitHub Actions
-- `nvidia-smi` (optional)
-
-## Installation
-
-Clone the repository:
+SystemPulse is not yet published to PyPI. Install the current project from source:
 
 ```bash
 git clone https://github.com/guptaoni891-ctrl/systempulse.git
 cd systempulse
+python -m pip install -e .
 ```
+
+Then open the menu, live dashboard, or a one-time snapshot:
+
+```bash
+systempulse
+systempulse live
+systempulse snapshot
+```
+
+Install the optional exporter dependencies from the source checkout when Prometheus support is
+needed:
+
+```bash
+python -m pip install -e ".[prometheus]"
+systempulse serve
+```
+
+After a future PyPI release, installation will become:
+
+```bash
+pip install systempulse
+pip install "systempulse[prometheus]"  # only when exporter support is needed
+```
+
+These PyPI commands are release instructions, not a claim that version 2.0 is currently published.
+For virtual-environment setup on each platform, see [Installation from source](#installation-from-source).
+
+## Features
+
+- CPU, memory, system-disk, and network monitoring.
+- Network totals since boot and upload/download rate calculation.
+- CPU temperature when the operating system exposes a usable sensor through `psutil`.
+- Top CPU-consuming processes.
+- NVIDIA GPU usage, temperature, VRAM, and optional power through `nvidia-smi`.
+- Multiple NVIDIA GPUs represented independently in snapshots, alerts, history, and Prometheus.
+- Rich one-shot and live terminal views with configurable status thresholds.
+- Stateful alerts with duration, hysteresis, cooldown, escalation, and recovery transitions.
+- Transactional SQLite snapshot, GPU, and durable alert-event history with retention.
+- CSV snapshot logging and custom output paths.
+- Optional scrape-decoupled Prometheus exporter.
+- Typed, validated JSON configuration with OS-specific config and data locations.
+- Python 3.11–3.13 support with cross-platform CI, static typing, and enforced branch coverage.
+
+## Platform support
+
+| Platform | Core metrics | CPU temperature | NVIDIA GPU |
+|---|---|---|---|
+| Windows 10/11 | Supported | Available only when exposed through `psutil` | Requires `nvidia-smi` |
+| macOS | Supported | Often unavailable through `psutil` | Generally unavailable on modern Macs |
+| Linux | Supported | Commonly available when supported sensors are exposed | Requires `nvidia-smi` |
+
+Missing sensors or GPU tooling are reported as unavailable; they do not prevent core monitoring.
+Use `--no-gpu` to skip NVIDIA detection explicitly.
+
+## CLI reference
+
+Global options must appear before the command:
+
+```text
+--config PATH   use an explicit JSON configuration
+--no-gpu        skip NVIDIA GPU collection
+--version       print the installed version
+```
+
+### Monitor the host
+
+| Command | Purpose |
+|---|---|
+| `systempulse` | Open the interactive menu. |
+| `systempulse menu` | Open the same menu explicitly. |
+| `systempulse live` | Run the continuously updating dashboard until interrupted. |
+| `systempulse snapshot` | Render one authoritative system snapshot. |
+| `systempulse processes --limit 10` | Show processes sorted by sampled CPU usage. |
+| `systempulse network` | Show cumulative sent/received counters since boot. |
+| `systempulse network --speed` | Measure current upload and download rates. |
+| `systempulse --no-gpu snapshot` | Collect a snapshot without running `nvidia-smi`. |
+
+The installed module entry point is equivalent, for example `python -m systempulse snapshot`.
+
+### Alerts and history
+
+| Command | Purpose |
+|---|---|
+| `systempulse alerts` | Show configured alert rules and the runtime-state limitation. |
+| `systempulse alerts --history --limit 20` | Show recent durable alert transitions. |
+| `systempulse history --limit 10` | Show a history summary and recent samples. |
+| `systempulse history --hours 24 --limit 20` | Restrict history to recent hours. |
+| `systempulse history --days 7` | Restrict history to recent days. |
+
+`--hours` and `--days` are mutually exclusive. Active alerts exist only in the live process; durable
+transition history is stored separately in SQLite. See [docs/alerts.md](docs/alerts.md) and
+[docs/history.md](docs/history.md).
+
+### Save and export
+
+| Command | Purpose |
+|---|---|
+| `systempulse save` | Append one sampled reading to the configured CSV file. |
+| `systempulse save --output logs/readings.csv` | Override the CSV destination. |
+| `systempulse serve` | Serve current metrics at `127.0.0.1:9100/metrics`. |
+| `systempulse serve --host 0.0.0.0 --port 9200 --interval 2` | Override exporter binding and sampling interval. |
+
+Prometheus support requires the `prometheus` extra. Binding beyond `127.0.0.1` exposes host metrics
+to reachable clients and should be an explicit decision. See
+[docs/prometheus.md](docs/prometheus.md).
+
+### Inspect and update configuration
+
+| Command | Purpose |
+|---|---|
+| `systempulse show-config` | Print the effective configuration; legacy alias for `config show`. |
+| `systempulse config show` | Print the effective validated configuration. |
+| `systempulse config path` | Print the selected or default user config path. |
+| `systempulse config init` | Create a complete user configuration without replacing an existing file. |
+| `systempulse config init --force` | Replace the target configuration intentionally. |
+| `systempulse config set cpu.warning 70` | Validate and update one supported setting. |
+| `systempulse --config custom.json config show` | Use an explicit configuration path. |
+
+Configuration precedence, every supported key, and a complete valid example are documented in
+[docs/configuration.md](docs/configuration.md).
+
+## Architecture
+
+```mermaid
+flowchart TD
+    C[System collectors] --> S[MonitorService]
+    S --> SS[Authoritative SystemSnapshot]
+
+    SS --> UI[Rich terminal UI]
+    SS --> A[AlertEngine]
+    SS --> CSV[CSV logger]
+    SS --> H[SQLite history]
+    A --> AE[Alert transition events]
+    AE --> H
+
+    ES[Exporter sampling loop] --> S
+    SS --> LS[Lock-protected latest state]
+    LS --> PE[Prometheus collector]
+    PS[Prometheus scrape] --> PE
+```
+
+Collectors gather raw host data. `MonitorService` combines it into one immutable, UTC-stamped
+`SystemSnapshot`; presentation and persistence components consume that snapshot rather than
+collecting independently. `AlertEngine` evaluates state transitions but never polls hardware.
+
+The exporter has its own monotonic sampling loop that updates lock-protected latest state.
+Prometheus scrapes read that state and never call `MonitorService`, `psutil`, or `nvidia-smi`.
+SQLite is a separate sink and does not feed Prometheus. See
+[docs/architecture.md](docs/architecture.md) for module boundaries and design guarantees.
+
+## Installation from source
+
+SystemPulse requires Python 3.11, 3.12, or 3.13.
 
 ### Windows PowerShell
 
 ```powershell
+git clone https://github.com/guptaoni891-ctrl/systempulse.git
+cd systempulse
 py -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-### macOS / Linux
+### Linux and macOS
 
 ```bash
+git clone https://github.com/guptaoni891-ctrl/systempulse.git
+cd systempulse
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-For an installed release with Prometheus exporter support:
-
-```bash
-pip install "systempulse[prometheus]"
-# or
-pipx install "systempulse[prometheus]"
-```
-
-## Usage
-
-Open the interactive menu:
-
-```bash
-systempulse
-```
-
-Show a single system snapshot:
-
-```bash
-systempulse snapshot
-```
-
-Start the live dashboard:
-
-```bash
-systempulse live
-```
-
-Show configured alert rules and the runtime-state limitation:
-
-```bash
-systempulse alerts
-systempulse alerts --history --limit 20
-```
-
-Show local metric history:
-
-```bash
-systempulse history
-systempulse history --hours 24 --limit 20
-systempulse history --days 7
-```
-
-Expose the latest sample at `http://127.0.0.1:9100/metrics`:
-
-```bash
-systempulse serve
-systempulse serve --host 127.0.0.1 --port 9100 --interval 5
-```
-
-The default bind is local-only. Binding to `0.0.0.0` or another network interface is an explicit
-choice because host metrics can reveal information about the machine. The sampling interval controls
-how often SystemPulse polls the host; it is independent of Prometheus's scrape interval. Scraping
-`/metrics` only reads the latest in-memory snapshot and never invokes `psutil` or `nvidia-smi`.
-
-Show the top CPU-consuming processes:
-
-```bash
-systempulse processes
-systempulse processes --limit 10
-```
-
-Show network statistics:
-
-```bash
-systempulse network
-systempulse network --speed
-```
-
-Save a system reading to CSV:
-
-```bash
-systempulse save
-systempulse save --output logs/readings.csv
-```
-
-Display the loaded configuration:
-
-```bash
-systempulse show-config
-systempulse config show
-```
-
-Show the active configuration path, create a user configuration, or update a setting:
-
-```bash
-systempulse config path
-systempulse config init
-systempulse config set cpu.warning 70
-systempulse config set alerts.cpu.warning 80
-systempulse config set alerts.cpu.duration 30
-systempulse config set history.retention_days 14
-systempulse config set history.database /custom/path/systempulse.db
-systempulse config set prometheus.port 9200
-systempulse config set prometheus.interval 2
-```
-
-`config init` refuses to replace an existing file. Use `systempulse config init --force`
-only when replacement is intentional.
-
-Show the installed version:
-
-```bash
-systempulse --version
-```
-
-Run without NVIDIA GPU monitoring:
-
-```bash
-systempulse --no-gpu snapshot
-```
-
-Use a custom configuration file:
-
-```bash
-systempulse --config custom-config.json live
-```
-
-SystemPulse can also be run without the installed command:
-
-```bash
-python -m systempulse
-```
-
-## Configuration
-
-SystemPulse works with built-in defaults when no configuration file exists. User configuration is
-stored in the platform-specific directory selected by `platformdirs`:
-
-| Platform | Typical configuration location |
-|---|---|
-| Windows | `%APPDATA%\SystemPulse\config.json` |
-| macOS | `~/Library/Application Support/SystemPulse/config.json` |
-| Linux | `~/.config/SystemPulse/config.json` |
-
-The exact location is available through `systempulse config path`. SystemPulse also reserves the
-corresponding platform-specific user data and state directories for future persistent data.
-
-Configuration precedence, from highest to lowest, is:
-
-1. Explicit `--config PATH`
-2. The `SYSTEMPULSE_CONFIG` environment variable
-3. A legacy `config.json` in the current working directory
-4. The platform-specific user configuration file
-5. Built-in defaults
-
-The legacy JSON schema remains supported. Users can configure CPU, RAM, disk, temperature, and GPU
-thresholds; refresh and CPU sampling intervals; CSV output; process count; and preferred temperature
-sensor names. Configuration is validated before monitoring starts, and invalid files produce a
-concise configuration error instead of a runtime `KeyError` or `TypeError`.
-
-The `alerts` section has a global `enabled` flag, a bounded `history_limit`, and rules for
-`cpu`, `memory`, `disk`, `cpu_temperature`, `gpu_usage`, and `gpu_temperature`. Each rule has
-`enabled`, `warning`, `critical`, `duration`, `cooldown`, and `hysteresis` settings. These alert
-thresholds are intentionally separate from the legacy presentation thresholds so changing a live
-alert rule does not silently alter the existing status display.
-
-The `history` section contains `enabled`, `database`, and `retention_days`. History is enabled by
-default, retains 30 days, and stores `systempulse.db` under the platform-specific SystemPulse user
-data directory selected by `platformdirs`. A custom database path may be absolute or relative to the
-process working directory. Retention must be a positive number of days.
-
-The `prometheus` section contains `host`, `port`, and `interval`, defaulting to `127.0.0.1`, `9100`,
-and 5 seconds. `systempulse serve --host/--port/--interval` overrides the corresponding loaded
-configuration for that invocation. Configuration-file precedence remains as listed above; command
-options are the final exporter-only override. Host validation is local and performs no DNS lookup.
-
-An explicitly selected or discovered malformed file is reported as an error. A missing explicit file
-is also an error; when no file is selected or discovered, built-in defaults are used silently.
-
-## Prometheus Exporter
-
-SystemPulse exports numeric base units with the `systempulse_` prefix. CPU, memory, disk, and GPU
-usage percentages are converted at the exporter boundary into ratios from 0 to 1. Memory and disk
-capacities use bytes, rates use bytes per second, temperatures use Celsius, power uses watts, and
-timestamps use Unix seconds. Raw network totals are exposed as counters so Prometheus can recognize
-an operating-system counter reset; SystemPulse's calculated network rates remain gauges.
-
-Multiple GPUs share metric names and use only a bounded snapshot-order label such as `gpu="0"`.
-GPU names, processes, diagnostics, and error strings are not labels. CPU temperature and GPU series
-are omitted when unavailable rather than reported as zero; a GPU that disappears from the latest
-snapshot also disappears from exposition. `systempulse_up`, the latest successful sample timestamp,
-sample age, and a sampling-error counter describe exporter health. After a sampling failure, the
-last valid core sample remains available while `systempulse_up` is 0 and sample age keeps increasing.
-
-SystemPulse's SQLite history and AlertEngine remain separate. The exporter neither reads nor writes
-history, and it does not expose per-process or historical-alert metrics.
-
-Minimal Prometheus scrape configuration:
-
-```yaml
-scrape_configs:
-  - job_name: systempulse
-    static_configs:
-      - targets:
-          - "127.0.0.1:9100"
-```
-
-## CPU Temperature Notes
-
-Temperature sensor access is OS- and hardware-dependent. Linux commonly exposes CPU sensors through `psutil.sensors_temperatures()`. Windows and macOS may not expose a CPU temperature through `psutil`; in that case SystemPulse displays `Unavailable` and continues normally.
-
-## CSV Logging
-
-SystemPulse can record timestamp, CPU/RAM/disk usage, raw byte counts, CPU temperature when available, network totals and speeds, and NVIDIA GPU metrics when available.
-
-Each row now comes from one authoritative sample. Network rates are derived from an earlier counter
-reading with a monotonic clock, while the row timestamp is timezone-aware UTC.
-
-The default output file is `system_log.csv`.
-
-SQLite history is additional functionality and does not replace CSV. `systempulse snapshot` remains
-display-only, while `systempulse live` writes each authoritative sample and its same-cycle alert
-transitions in one SQLite transaction. Collector diagnostics remain runtime-only and are not stored.
-
-History is local to the machine and contains normalized rows for snapshots, every GPU in each
-snapshot, and alert transition events. Cleanup runs once when a history-enabled live session starts;
-expired snapshots cascade to their GPU and alert-event rows. SystemPulse does not run `VACUUM` per
-sample.
-
-History summaries report the change between the first and last observed network counters in the
-selected period. This is explicitly a counter change, not a guaranteed transfer total; it is shown as
-unavailable when there are fewer than two samples or a counter reset is detected.
-
-## Tests and Code Quality
-
-```bash
-python -m pytest
-python -m pytest --cov=systempulse --cov-report=term-missing
-python -m ruff check .
-python -m ruff format --check .
-python -m mypy src/systempulse
-python -m build
-python -m twine check dist/*
-```
-
-Install and run the fast repository checks before committing:
-
-```bash
-pre-commit install
-pre-commit run --all-files
-```
-
-Coverage uses branch measurement against `systempulse` and enforces a 90% project floor. Ordinary
-`python -m pytest` remains concise and does not collect coverage unless requested.
-
-SystemPulse supports Python 3.11, 3.12, and 3.13. GitHub Actions tests the minimum and every declared
-minor version on Linux, with representative Python 3.13 coverage on Windows and macOS. Python 3.14
-is not currently claimed because it is not part of the tested support matrix.
-
-CI separates lint/format/type/coverage checks, the cross-platform test matrix, and package validation.
-The package job builds both distributions, runs `twine check`, installs the wheel without repository
-imports, and separately verifies the base and Prometheus-extra installation modes.
-
-## Architecture
-
-SystemPulse separates responsibilities across modules: `collector.py` collects low-level core metrics,
-`gpu.py` handles NVIDIA integration, and `service.py` combines them into the authoritative
-`SystemSnapshot`. The snapshot contains timezone-aware UTC time, network totals and rates, GPU data,
-and lightweight optional-collector diagnostics. `ui.py` only renders samples, `logger.py` writes a
-sample to CSV, `alerts.py` evaluates snapshots and owns process-local alert state, `monitor.py`
-schedules the live terminal display and invokes the alert engine, `history.py` owns SQLite schema,
-transactions, retention, and queries, `exporter.py` independently samples `MonitorService` into a
-lock-protected latest-snapshot state and exposes it through a dedicated Prometheus registry, and
-`cli.py` handles commands.
-
-The live display is scheduled against monotonic target ticks. Its first sample is immediate; each
-later sample starts at the configured tick. If collection runs past one or more ticks, those ticks are
-skipped rather than replayed, and the next future tick remains anchored to the existing schedule.
-
-Alert duration is measured with a monotonic clock. The timer starts when a metric first reaches any
-alert threshold, continues if it escalates while pending, and is cancelled if the metric recovers or
-becomes unavailable before opening. Open alerts escalate immediately at the critical threshold and
-recover only below `threshold - hysteresis`. A missing active metric holds its last state and does not
-produce a false resolution. Transition events are emitted only for open, escalation, de-escalation,
-and resolution; cooldown delays reopening after a resolution. GPU rules are evaluated independently
-using stable snapshot-order identities such as `gpu.0.usage` and `gpu.1.temperature`.
-
-Alert state and recent events exist only for the lifetime of the live process and are bounded by
-`alerts.history_limit`; active state is not persisted. Transition events are persisted when SQLite
-history is enabled and can be read with `systempulse alerts --history`. `systempulse snapshot`
-remains a stateless one-shot metric view and does not manufacture duration-based alert state or write
-history. Plain `systempulse alerts` continues to show configured rules.
-
-## What Changed in 1.1.0
-
-- Added Windows system-drive detection instead of assuming the Unix `/` filesystem root
-- Kept `/` as the correct root on macOS and Linux
-- Made missing/unsupported temperature APIs explicitly safe across platforms
-- Added cross-platform collector tests
-- Expanded GitHub Actions to Windows, macOS, and Linux
-- Updated package metadata and documentation to describe cross-platform support accurately
+The `dev` extra includes the optional Prometheus dependency so the complete test suite can exercise
+both normal exporter behavior and missing-dependency behavior. Runtime users can install `.` or
+`.[prometheus]` instead.
+
+## Documentation
+
+- [Configuration](docs/configuration.md)
+- [Alerts](docs/alerts.md)
+- [SQLite history](docs/history.md)
+- [Prometheus exporter](docs/prometheus.md)
+- [Architecture](docs/architecture.md)
+- [Development and CI](docs/development.md)
+- [Demo capture](docs/demo.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Changelog](CHANGELOG.md)
+
+## Engineering quality
+
+The repository enforces branch coverage at 90% and currently maintains more than 90% coverage. CI
+separates quality checks, the supported Python/OS test matrix, and clean package validation. Local
+commands are documented in [docs/development.md](docs/development.md).
+
+Important boundaries include immutable authoritative snapshots, monotonic interval scheduling,
+timezone-aware UTC persistence, transactional SQLite writes, bounded Prometheus labels, optional
+exporter dependencies, and no scrape-triggered hardware collection.
 
 ## License
 
-This project is licensed under the MIT License.
+SystemPulse is available under the [MIT License](LICENSE).
