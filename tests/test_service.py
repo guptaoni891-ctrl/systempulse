@@ -7,6 +7,7 @@ from systempulse.config import AppConfig
 from systempulse.models import (
     CollectionDiagnostic,
     CoreMetrics,
+    CPUPowerCollection,
     DiagnosticKind,
     GPUCollection,
     GPUStats,
@@ -52,6 +53,9 @@ def _service(core_collector, **kwargs):
         AppConfig(),
         core_collector=core_collector,
         gpu_collector=kwargs.pop("gpu_collector", Mock(return_value=GPUCollection(gpus=()))),
+        cpu_power_collector=kwargs.pop(
+            "cpu_power_collector", Mock(return_value=CPUPowerCollection())
+        ),
         monotonic=kwargs.pop("monotonic", Mock(return_value=10.0)),
         wall_clock=kwargs.pop(
             "wall_clock",
@@ -64,7 +68,14 @@ def _service(core_collector, **kwargs):
 def test_complete_sample_is_one_authoritative_immutable_representation():
     core_collector = Mock(return_value=_core())
     gpu_collector = Mock(return_value=GPUCollection(gpus=(_gpu("GPU One"), _gpu("GPU Two"))))
-    service = _service(core_collector, gpu_collector=gpu_collector)
+    cpu_power_collector = Mock(
+        return_value=CPUPowerCollection(cpu_package_watts=50.0, source="Test provider")
+    )
+    service = _service(
+        core_collector,
+        gpu_collector=gpu_collector,
+        cpu_power_collector=cpu_power_collector,
+    )
 
     sample = service.sample()
 
@@ -76,9 +87,17 @@ def test_complete_sample_is_one_authoritative_immutable_representation():
     assert sample.network == NetworkStats(1_000, 2_000)
     assert sample.network_speed.upload_bytes_per_second == 0
     assert [gpu.name for gpu in sample.gpus] == ["GPU One", "GPU Two"]
+    assert sample.power.cpu_package_watts == 50.0
+    assert sample.power.gpu_total_watts == 85.0
+    assert sample.power.cpu_gpu_watts == 135.0
+    assert sample.power.estimated_system_watts == 170.0
+    assert sample.power.estimated_wall_watts == pytest.approx(188.89, rel=1e-3)
+    assert sample.power.actual_wall_watts is None
+    assert sample.power.cpu_source == "Test provider"
     assert sample.diagnostics == ()
     core_collector.assert_called_once_with(service.config)
     gpu_collector.assert_called_once_with()
+    cpu_power_collector.assert_called_once_with()
 
 
 def test_first_sample_has_clean_zero_network_rates():
@@ -160,16 +179,22 @@ def test_optional_collector_diagnostics_are_preserved_with_usable_sample():
         kind=DiagnosticKind.COMMAND_MISSING,
         message="No nvidia-smi.",
     )
+    power_diagnostic = CollectionDiagnostic(
+        collector="cpu_power",
+        kind=DiagnosticKind.UNAVAILABLE,
+        message="No CPU power provider.",
+    )
     service = _service(
         Mock(return_value=_core(temperature=None, diagnostics=(temperature_diagnostic,))),
         gpu_collector=Mock(return_value=GPUCollection(gpus=(), diagnostics=(gpu_diagnostic,))),
+        cpu_power_collector=Mock(return_value=CPUPowerCollection(diagnostics=(power_diagnostic,))),
     )
 
     sample = service.sample()
 
     assert sample.cpu_temperature_celsius is None
     assert sample.gpus == ()
-    assert sample.diagnostics == (temperature_diagnostic, gpu_diagnostic)
+    assert sample.diagnostics == (temperature_diagnostic, gpu_diagnostic, power_diagnostic)
     assert sample.cpu_usage_percent == 12.5
 
 
@@ -186,6 +211,26 @@ def test_disabled_gpu_is_not_polled_or_reported_as_failure():
     assert sample.gpus == ()
     assert sample.diagnostics == ()
     gpu_collector.assert_not_called()
+
+
+def test_disabled_power_is_not_polled_and_all_power_values_are_unavailable():
+    cpu_power_collector = Mock()
+    service = MonitorService(
+        AppConfig.from_mapping({"power": {"enabled": False}}),
+        core_collector=Mock(return_value=_core()),
+        gpu_collector=Mock(return_value=GPUCollection(gpus=(_gpu(),))),
+        cpu_power_collector=cpu_power_collector,
+        monotonic=Mock(return_value=10.0),
+        wall_clock=Mock(return_value=datetime(2026, 8, 24, 8, 0, tzinfo=UTC)),
+    )
+
+    sample = service.sample()
+
+    assert sample.power.cpu_package_watts is None
+    assert sample.power.gpu_total_watts is None
+    assert sample.power.estimated_wall_watts is None
+    assert sample.diagnostics == ()
+    cpu_power_collector.assert_not_called()
 
 
 def test_sample_with_network_rate_primes_only_counters_before_complete_sample():
@@ -262,9 +307,15 @@ def test_naive_wall_clock_is_rejected():
 def test_service_calls_each_complete_collector_once_per_sample():
     core_collector = Mock(return_value=_core())
     gpu_collector = Mock(return_value=GPUCollection(gpus=()))
-    service = _service(core_collector, gpu_collector=gpu_collector)
+    cpu_power_collector = Mock(return_value=CPUPowerCollection())
+    service = _service(
+        core_collector,
+        gpu_collector=gpu_collector,
+        cpu_power_collector=cpu_power_collector,
+    )
 
     service.sample()
 
     assert core_collector.mock_calls == [call(service.config)]
     assert gpu_collector.mock_calls == [call()]
+    assert cpu_power_collector.mock_calls == [call()]

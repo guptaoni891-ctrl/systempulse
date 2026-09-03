@@ -133,7 +133,38 @@ def build_snapshot_view(
                 _status_text(gpu_status),
             )
 
-    renderables: list[RenderableType] = [table, gpu_table]
+    power_table = Table(title="Power", expand=True)
+    power_table.add_column("Metric", style="bold")
+    power_table.add_column("Value")
+    power_table.add_column("Source")
+    power = snapshot.power
+
+    def watts(value: float | None, *, estimated: bool = False) -> str:
+        if value is None:
+            return "Unavailable"
+        prefix = "~" if estimated else ""
+        return f"{prefix}{value:.1f} W"
+
+    power_table.add_row(
+        "CPU Package",
+        watts(power.cpu_package_watts),
+        power.cpu_source or "—",
+    )
+    power_table.add_row("GPU Total", watts(power.gpu_total_watts), "nvidia-smi")
+    power_table.add_row("CPU + GPU", watts(power.cpu_gpu_watts), "Measured components")
+    power_table.add_row(
+        "Estimated System",
+        watts(power.estimated_system_watts, estimated=True),
+        "Estimate",
+    )
+    power_table.add_row(
+        "Estimated Wall",
+        watts(power.estimated_wall_watts, estimated=True),
+        "Estimate",
+    )
+    power_table.add_row("Actual Wall", watts(power.actual_wall_watts), "External provider")
+
+    renderables: list[RenderableType] = [table, gpu_table, power_table]
     if active_alerts is not None:
         renderables.append(_build_alerts_view(active_alerts, enabled=config.alerts.enabled))
     if history_warning is not None:

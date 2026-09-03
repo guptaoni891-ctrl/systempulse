@@ -88,6 +88,13 @@ and malformed rows become diagnostics instead of terminating core monitoring.
 
 The parser supports multiple output rows. GPU power is optional.
 
+### `power.py`
+
+Queries the optional LibreHardwareMonitor WMI provider for Windows CPU package power, aggregates
+already-collected NVIDIA GPU readings, and calculates explicitly labelled system and wall-power
+estimates. CPU sensor selection excludes GPU hardware. Collection failures become bounded
+diagnostics, while actual wall power remains reserved for a future external provider.
+
 ### `network.py`
 
 Wraps cumulative OS network counters and calculates non-negative rates from two observations and a

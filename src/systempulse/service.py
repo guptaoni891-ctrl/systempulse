@@ -10,6 +10,7 @@ from systempulse.gpu import collect_gpu_stats
 from systempulse.models import (
     CollectionDiagnostic,
     CoreMetrics,
+    CPUPowerCollection,
     DiagnosticKind,
     GPUCollection,
     NetworkSpeed,
@@ -17,10 +18,12 @@ from systempulse.models import (
     SystemSnapshot,
 )
 from systempulse.network import calculate_network_speed, get_network_totals
+from systempulse.power import calculate_power_stats, collect_cpu_package_power
 
 CoreCollector = Callable[[AppConfig], CoreMetrics]
 GPUCollector = Callable[[], GPUCollection]
 NetworkCollector = Callable[[], NetworkStats]
+CPUPowerCollector = Callable[[], CPUPowerCollection]
 MonotonicClock = Callable[[], float]
 WallClock = Callable[[], datetime]
 Sleep = Callable[[float], None]
@@ -41,6 +44,7 @@ class MonitorService:
         core_collector: CoreCollector | None = None,
         gpu_collector: GPUCollector | None = None,
         network_collector: NetworkCollector | None = None,
+        cpu_power_collector: CPUPowerCollector | None = None,
         monotonic: MonotonicClock | None = None,
         wall_clock: WallClock | None = None,
         sleep: Sleep | None = None,
@@ -50,6 +54,7 @@ class MonitorService:
         self._core_collector = core_collector or collect_core_metrics
         self._gpu_collector = gpu_collector or collect_gpu_stats
         self._network_collector = network_collector or get_network_totals
+        self._cpu_power_collector = cpu_power_collector or collect_cpu_package_power
         self._monotonic = monotonic or time.monotonic
         self._wall_clock = wall_clock or _utc_now
         self._sleep = sleep or time.sleep
@@ -85,6 +90,16 @@ class MonitorService:
 
         gpu = self._gpu_collector() if self.include_gpu else GPUCollection(gpus=())
         diagnostics.extend(gpu.diagnostics)
+        cpu_power = (
+            self._cpu_power_collector() if self.config.power.enabled else CPUPowerCollection()
+        )
+        diagnostics.extend(cpu_power.diagnostics)
+        power = calculate_power_stats(
+            cpu_power.cpu_package_watts,
+            cpu_power.source,
+            gpu.gpus,
+            self.config.power,
+        )
 
         return SystemSnapshot(
             timestamp=timestamp,
@@ -99,6 +114,7 @@ class MonitorService:
             network=core.network,
             network_speed=network_speed,
             gpus=gpu.gpus,
+            power=power,
             diagnostics=tuple(diagnostics),
         )
 
