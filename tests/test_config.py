@@ -12,6 +12,7 @@ from systempulse.config import (
     AppConfig,
     ConfigError,
     HistoryConfig,
+    PowerConfig,
     PrometheusConfig,
     initialize_config,
     load_config,
@@ -38,6 +39,73 @@ def test_typed_defaults_match_existing_v1_values():
     assert config.logging.csv_path == "system_log.csv"
     assert config.processes.limit == 5
     assert config.temperature.preferred_sensors[0] == "k10temp"
+    assert config.power == PowerConfig(
+        enabled=True,
+        other_components_watts=35.0,
+        psu_efficiency=0.90,
+    )
+
+
+def test_old_configuration_without_power_section_uses_power_defaults():
+    config = AppConfig.from_mapping({"monitor": {"refresh_interval": 4}})
+
+    assert config.power == PowerConfig()
+
+
+def test_partial_power_configuration_deep_merges_defaults():
+    config = AppConfig.from_mapping({"power": {"other_components_watts": 50}})
+
+    assert config.power == PowerConfig(
+        enabled=True,
+        other_components_watts=50.0,
+        psu_efficiency=0.90,
+    )
+    assert config.to_dict()["power"] == {
+        "enabled": True,
+        "other_components_watts": 50.0,
+        "psu_efficiency": 0.90,
+    }
+
+
+@pytest.mark.parametrize(
+    "power",
+    [
+        "enabled",
+        {"enabled": "true"},
+        {"other_components_watts": -1},
+        {"other_components_watts": True},
+        {"other_components_watts": float("inf")},
+        {"psu_efficiency": 0},
+        {"psu_efficiency": -0.1},
+        {"psu_efficiency": 1.01},
+        {"psu_efficiency": "0.9"},
+        {"unsupported": True},
+    ],
+)
+def test_invalid_power_configuration_is_rejected(power):
+    with pytest.raises(ConfigError):
+        AppConfig.from_mapping({"power": power})
+
+
+def test_zero_other_component_estimate_and_full_efficiency_are_valid():
+    power = PowerConfig(other_components_watts=0, psu_efficiency=1)
+
+    assert power.other_components_watts == 0.0
+    assert power.psu_efficiency == 1.0
+
+
+def test_config_set_supports_power_values(tmp_path):
+    path = tmp_path / "config.json"
+
+    set_config_value(path, "power.enabled", "false")
+    set_config_value(path, "power.other_components_watts", "42.5")
+    config = set_config_value(path, "power.psu_efficiency", "0.85")
+
+    assert config.power == PowerConfig(
+        enabled=False,
+        other_components_watts=42.5,
+        psu_efficiency=0.85,
+    )
 
 
 def test_default_alert_configuration_is_typed_and_enabled():

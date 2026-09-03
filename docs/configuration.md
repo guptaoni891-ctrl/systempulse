@@ -97,6 +97,17 @@ configured interval under `prometheus`.
 Relative CSV paths are interpreted from the process working directory. The `save --output PATH`
 option overrides `logging.csv_path` for one invocation.
 
+### Power telemetry
+
+| Key | Type | Default | Meaning |
+|---|---:|---:|---|
+| `power.enabled` | Boolean | `true` | Enables CPU power collection and derived power statistics. |
+| `power.other_components_watts` | number ≥ 0 | `35.0` | Estimated DC power for components outside the CPU and NVIDIA GPUs. |
+| `power.psu_efficiency` | number > 0 and ≤ 1 | `0.90` | Efficiency used only to estimate wall power. |
+
+On Windows, CPU package power is read from the optional LibreHardwareMonitor WMI provider. System
+and wall values are estimates; SystemPulse does not report either as an actual wall measurement.
+
 ### Alerts
 
 `alerts.enabled` enables or disables the complete stateful alert engine. `alerts.history_limit` is a
@@ -249,6 +260,11 @@ to a portable relative example; the complete document is accepted by the real lo
     "host": "127.0.0.1",
     "port": 9100,
     "interval": 5.0
+  },
+  "power": {
+    "enabled": true,
+    "other_components_watts": 35.0,
+    "psu_efficiency": 0.9
   }
 }
 ```
@@ -276,6 +292,7 @@ temperature.preferred_sensors
 alerts.enabled, alerts.history_limit
 history.enabled, history.database, history.retention_days
 prometheus.host, prometheus.port, prometheus.interval
+power.enabled, power.other_components_watts, power.psu_efficiency
 ```
 
 For every alert rule name—`cpu`, `memory`, `disk`, `cpu_temperature`, `gpu_usage`, and

@@ -63,6 +63,8 @@ For virtual-environment setup on each platform, see [Installation from source](#
 - CPU temperature when the operating system exposes a usable sensor through `psutil`.
 - Top CPU-consuming processes.
 - NVIDIA GPU usage, temperature, VRAM, and optional power through `nvidia-smi`.
+- CPU package power on Windows through optional LibreHardwareMonitor, plus clearly labelled system
+  and wall-power estimates.
 - Multiple NVIDIA GPUs represented independently in snapshots, alerts, history, and Prometheus.
 - Rich one-shot and live terminal views with configurable status thresholds.
 - Stateful alerts with duration, hysteresis, cooldown, escalation, and recovery transitions.
@@ -74,14 +76,17 @@ For virtual-environment setup on each platform, see [Installation from source](#
 
 ## Platform support
 
-| Platform | Core metrics | CPU temperature | NVIDIA GPU |
-|---|---|---|---|
-| Windows 10/11 | Supported | Available only when exposed through `psutil` | Requires `nvidia-smi` |
-| macOS | Supported | Often unavailable through `psutil` | Generally unavailable on modern Macs |
-| Linux | Supported | Commonly available when supported sensors are exposed | Requires `nvidia-smi` |
+| Platform | Core metrics | CPU temperature | CPU package power | NVIDIA GPU |
+|---|---|---|---|---|
+| Windows 10/11 | Supported | Available only when exposed through `psutil` | Optional LibreHardwareMonitor | Requires `nvidia-smi` |
+| macOS | Supported | Often unavailable through `psutil` | Unavailable in V1 | Generally unavailable on modern Macs |
+| Linux | Supported | Commonly available when supported sensors are exposed | Unavailable in V1 | Requires `nvidia-smi` |
 
 Missing sensors or GPU tooling are reported as unavailable; they do not prevent core monitoring.
 Use `--no-gpu` to skip NVIDIA detection explicitly.
+
+For Windows CPU power, run LibreHardwareMonitor so its `root\LibreHardwareMonitor` WMI namespace
+is available. LibreHardwareMonitor is optional and is not installed as a Python dependency.
 
 ## CLI reference
 

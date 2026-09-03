@@ -29,5 +29,10 @@
       "zenpower",
       "cpu_thermal"
     ]
+  },
+  "power": {
+    "enabled": true,
+    "other_components_watts": 35.0,
+    "psu_efficiency": 0.9
   }
 }

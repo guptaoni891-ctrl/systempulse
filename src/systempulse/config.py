@@ -267,6 +267,27 @@ class PrometheusConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PowerConfig:
+    enabled: bool = True
+    other_components_watts: float = 35.0
+    psu_efficiency: float = 0.90
+
+    def __post_init__(self) -> None:
+        enabled = _boolean(self.enabled, "power.enabled")
+        other_components_watts = _positive_number(
+            self.other_components_watts,
+            "power.other_components_watts",
+            allow_zero=True,
+        )
+        psu_efficiency = _positive_number(self.psu_efficiency, "power.psu_efficiency")
+        if psu_efficiency > 1:
+            raise ConfigError("power.psu_efficiency must be at most 1.")
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "other_components_watts", other_components_watts)
+        object.__setattr__(self, "psu_efficiency", psu_efficiency)
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
@@ -276,6 +297,7 @@ class AppConfig:
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
     prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
+    power: PowerConfig = field(default_factory=PowerConfig)
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> AppConfig:
@@ -291,6 +313,7 @@ class AppConfig:
                 "alerts",
                 "history",
                 "prometheus",
+                "power",
             },
             "top-level",
         )
@@ -345,6 +368,12 @@ class AppConfig:
             prometheus_raw,
             {"host", "port", "interval"},
             "prometheus",
+        )
+        power_raw = _mapping(root.get("power", {}), "power")
+        _reject_unknown(
+            power_raw,
+            {"enabled", "other_components_watts", "psu_efficiency"},
+            "power",
         )
 
         def alert_rule(name: str, default: AlertRuleConfig) -> AlertRuleConfig:
@@ -411,6 +440,15 @@ class AppConfig:
                 port=prometheus_raw.get("port", defaults.prometheus.port),
                 interval=prometheus_raw.get("interval", defaults.prometheus.interval),
             ),
+            power=PowerConfig(
+                enabled=power_raw.get("enabled", defaults.power.enabled),
+                other_components_watts=power_raw.get(
+                    "other_components_watts", defaults.power.other_components_watts
+                ),
+                psu_efficiency=power_raw.get(
+                    "psu_efficiency", defaults.power.psu_efficiency
+                ),
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -468,6 +506,11 @@ class AppConfig:
                 "host": self.prometheus.host,
                 "port": self.prometheus.port,
                 "interval": self.prometheus.interval,
+            },
+            "power": {
+                "enabled": self.power.enabled,
+                "other_components_watts": self.power.other_components_watts,
+                "psu_efficiency": self.power.psu_efficiency,
             },
         }
 
@@ -575,6 +618,9 @@ SETTING_PATHS: dict[str, tuple[str, ...]] = {
     "prometheus.host": ("prometheus", "host"),
     "prometheus.port": ("prometheus", "port"),
     "prometheus.interval": ("prometheus", "interval"),
+    "power.enabled": ("power", "enabled"),
+    "power.other_components_watts": ("power", "other_components_watts"),
+    "power.psu_efficiency": ("power", "psu_efficiency"),
 }
 
 for _rule_name in (

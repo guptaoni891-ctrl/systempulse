@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -13,6 +13,17 @@ class GPUStats:
     vram_used_mib: float
     vram_total_mib: float
     power_watts: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PowerStats:
+    cpu_package_watts: float | None = None
+    gpu_total_watts: float | None = None
+    cpu_gpu_watts: float | None = None
+    estimated_system_watts: float | None = None
+    estimated_wall_watts: float | None = None
+    actual_wall_watts: float | None = None
+    cpu_source: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +88,13 @@ class GPUCollection:
 
 
 @dataclass(frozen=True, slots=True)
+class CPUPowerCollection:
+    cpu_package_watts: float | None = None
+    source: str | None = None
+    diagnostics: tuple[CollectionDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SystemSnapshot:
     timestamp: datetime
     cpu_usage_percent: float
@@ -91,6 +109,7 @@ class SystemSnapshot:
     network_speed: NetworkSpeed
     gpus: tuple[GPUStats, ...]
     diagnostics: tuple[CollectionDiagnostic, ...] = ()
+    power: PowerStats = field(default_factory=PowerStats)
 
     def __post_init__(self) -> None:
         if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:

@@ -16,6 +16,7 @@ from systempulse.models import (
     HistorySummary,
     NetworkSpeed,
     NetworkStats,
+    PowerStats,
     ProcessStats,
     SystemSnapshot,
 )
@@ -161,6 +162,43 @@ def test_available_temperature_and_gpu_metrics_are_rendered():
     assert "Test GPU" in rendered
     assert "512 / 4096 MiB" in rendered
     assert "Unavailable" in rendered
+
+
+def test_power_panel_distinguishes_measurements_estimates_and_actual_wall_power():
+    snapshot = replace(
+        _snapshot(),
+        power=PowerStats(
+            cpu_package_watts=46.2,
+            gpu_total_watts=87.5,
+            cpu_gpu_watts=133.7,
+            estimated_system_watts=168.7,
+            estimated_wall_watts=187.4,
+            actual_wall_watts=None,
+            cpu_source="LibreHardwareMonitor",
+        ),
+    )
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, width=120)
+
+    console.print(build_snapshot_view(snapshot, AppConfig()))
+    rendered = output.getvalue()
+
+    assert "Power" in rendered
+    assert "CPU Package" in rendered and "46.2 W" in rendered
+    assert "GPU Total" in rendered and "87.5 W" in rendered
+    assert "CPU + GPU" in rendered and "133.7 W" in rendered
+    assert "Estimated System" in rendered and "~168.7 W" in rendered
+    assert "Estimated Wall" in rendered and "~187.4 W" in rendered
+    assert "Actual Wall" in rendered and "Unavailable" in rendered
+    assert "LibreHardwareMonitor" in rendered
+
+
+def test_power_panel_renders_unavailable_instead_of_zero_for_missing_cpu_power():
+    rendered = _render(show_network_speed=False)
+
+    assert "CPU Package" in rendered
+    assert "Unavailable" in rendered
+    assert "~0.0 W" not in rendered
 
 
 def test_process_table_and_warning_panel_render(monkeypatch):
