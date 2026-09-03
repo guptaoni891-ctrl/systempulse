@@ -187,9 +187,7 @@ def test_optional_collector_diagnostics_are_preserved_with_usable_sample():
     service = _service(
         Mock(return_value=_core(temperature=None, diagnostics=(temperature_diagnostic,))),
         gpu_collector=Mock(return_value=GPUCollection(gpus=(), diagnostics=(gpu_diagnostic,))),
-        cpu_power_collector=Mock(
-            return_value=CPUPowerCollection(diagnostics=(power_diagnostic,))
-        ),
+        cpu_power_collector=Mock(return_value=CPUPowerCollection(diagnostics=(power_diagnostic,))),
     )
 
     sample = service.sample()

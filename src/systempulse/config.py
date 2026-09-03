@@ -445,9 +445,7 @@ class AppConfig:
                 other_components_watts=power_raw.get(
                     "other_components_watts", defaults.power.other_components_watts
                 ),
-                psu_efficiency=power_raw.get(
-                    "psu_efficiency", defaults.power.psu_efficiency
-                ),
+                psu_efficiency=power_raw.get("psu_efficiency", defaults.power.psu_efficiency),
             ),
         )
 

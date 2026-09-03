@@ -256,9 +256,7 @@ def calculate_power_stats(
         else None
     )
     estimated_system_watts = (
-        cpu_gpu_watts + config.other_components_watts
-        if cpu_gpu_watts is not None
-        else None
+        cpu_gpu_watts + config.other_components_watts if cpu_gpu_watts is not None else None
     )
     estimated_wall_watts = (
         estimated_system_watts / config.psu_efficiency
