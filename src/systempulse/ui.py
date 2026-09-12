@@ -15,6 +15,7 @@ from systempulse.models import (
     AlertSeverity,
     HistoricalSample,
     HistorySummary,
+    PowerHistorySummary,
     PowerSessionStats,
     ProcessStats,
     SystemSnapshot,
@@ -142,30 +143,32 @@ def build_snapshot_view(
     power_table.add_column("Source")
     power = snapshot.power
 
-    def watts(value: float | None, *, estimated: bool = False) -> str:
-        if value is None:
-            return "Unavailable"
-        prefix = "~" if estimated else ""
-        return f"{prefix}{value:.1f} W"
-
     power_table.add_row(
         "CPU Package",
-        watts(power.cpu_package_watts),
+        _format_power(power.cpu_package_watts),
         power.cpu_source or "—",
     )
-    power_table.add_row("GPU Total", watts(power.gpu_total_watts), "nvidia-smi")
-    power_table.add_row("CPU + GPU", watts(power.cpu_gpu_watts), "Measured components")
+    power_table.add_row("GPU Total", _format_power(power.gpu_total_watts), "nvidia-smi")
+    power_table.add_row(
+        "CPU + GPU",
+        _format_power(power.cpu_gpu_watts),
+        "Measured components",
+    )
     power_table.add_row(
         "Estimated System",
-        watts(power.estimated_system_watts, estimated=True),
+        _format_power(power.estimated_system_watts, estimated=True),
         "Estimate",
     )
     power_table.add_row(
         "Estimated Wall",
-        watts(power.estimated_wall_watts, estimated=True),
+        _format_power(power.estimated_wall_watts, estimated=True),
         "Estimate",
     )
-    power_table.add_row("Actual Wall", watts(power.actual_wall_watts), "External provider")
+    power_table.add_row(
+        "Actual Wall",
+        _format_power(power.actual_wall_watts),
+        "External provider",
+    )
 
     renderables: list[RenderableType] = [table, gpu_table, power_table]
     if power_session is not None:
@@ -181,24 +184,24 @@ def _build_power_session_view(session: PowerSessionStats) -> Table:
     table = Table(title="Power Session", expand=True)
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")
-    table.add_row("Current CPU", _session_watts(session.current_cpu_package_watts))
-    table.add_row("Current GPU", _session_watts(session.current_gpu_total_watts))
-    table.add_row("Current CPU + GPU", _session_watts(session.current_cpu_gpu_watts))
+    table.add_row("Current CPU", _format_power(session.current_cpu_package_watts))
+    table.add_row("Current GPU", _format_power(session.current_gpu_total_watts))
+    table.add_row("Current CPU + GPU", _format_power(session.current_cpu_gpu_watts))
     table.add_row(
         "Estimated System",
-        _session_watts(session.current_estimated_system_watts, estimated=True),
+        _format_power(session.current_estimated_system_watts, estimated=True),
     )
     table.add_row(
         "Estimated Wall",
-        _session_watts(session.current_estimated_wall_watts, estimated=True),
+        _format_power(session.current_estimated_wall_watts, estimated=True),
     )
     table.add_row(
         "Average Estimated Wall",
-        _session_watts(session.average_estimated_wall_watts, estimated=True),
+        _format_power(session.average_estimated_wall_watts, estimated=True),
     )
     table.add_row(
         "Peak Estimated Wall",
-        _session_watts(session.peak_estimated_wall_watts, estimated=True),
+        _format_power(session.peak_estimated_wall_watts, estimated=True),
     )
     table.add_row("Session Duration", format_duration(session.session_duration_seconds))
     table.add_row(
@@ -207,37 +210,37 @@ def _build_power_session_view(session: PowerSessionStats) -> Table:
     )
     table.add_row(
         "Estimated Energy Used",
-        _session_energy(session.estimated_wall_energy_wh, estimated=True),
+        _format_energy(session.estimated_wall_energy_wh, estimated=True),
     )
 
     if session.peak_actual_wall_watts is None:
         table.add_row("Actual Wall", "Unavailable")
     else:
-        table.add_row("Actual Wall", _session_watts(session.current_actual_wall_watts))
+        table.add_row("Actual Wall", _format_power(session.current_actual_wall_watts))
         table.add_row(
             "Average Actual Wall",
-            _session_watts(session.average_actual_wall_watts),
+            _format_power(session.average_actual_wall_watts),
         )
-        table.add_row("Peak Actual Wall", _session_watts(session.peak_actual_wall_watts))
+        table.add_row("Peak Actual Wall", _format_power(session.peak_actual_wall_watts))
         table.add_row(
             "Actual Observed Duration",
             format_duration(session.actual_wall_observed_duration_seconds),
         )
         table.add_row(
             "Actual Energy Used",
-            _session_energy(session.actual_wall_energy_wh),
+            _format_energy(session.actual_wall_energy_wh),
         )
     return table
 
 
-def _session_watts(value: float | None, *, estimated: bool = False) -> str:
+def _format_power(value: float | None, *, estimated: bool = False) -> str:
     if value is None:
         return "Unavailable"
     prefix = "~" if estimated else ""
     return f"{prefix}{value:.1f} W"
 
 
-def _session_energy(energy_wh: float, *, estimated: bool = False) -> str:
+def _format_energy(energy_wh: float, *, estimated: bool = False) -> str:
     prefix = "~" if estimated else ""
     if energy_wh < 1000.0:
         return f"{prefix}{energy_wh:.1f} Wh"
@@ -353,6 +356,7 @@ def print_history(
         )
         table.add_row("Alert events", str(summary.alert_event_count))
     console.print(table)
+    console.print(_build_power_history_view(summary.power))
 
     recent = Table(title="Recent Samples", expand=True)
     recent.add_column("UTC timestamp")
@@ -378,6 +382,81 @@ def print_history(
                 str(sample.gpu_count),
             )
     console.print(recent)
+    console.print(_build_recent_power_samples_view(samples))
+
+
+def _build_power_history_view(power: PowerHistorySummary) -> Table:
+    table = Table(title="Power History", expand=True)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("CPU average", _format_power(power.average_cpu_package_watts))
+    table.add_row("CPU peak", _format_power(power.peak_cpu_package_watts))
+    table.add_row("GPU average", _format_power(power.average_gpu_total_watts))
+    table.add_row("GPU peak", _format_power(power.peak_gpu_total_watts))
+    table.add_row("CPU + GPU average", _format_power(power.average_cpu_gpu_watts))
+    table.add_row("CPU + GPU peak", _format_power(power.peak_cpu_gpu_watts))
+    table.add_row(
+        "Estimated system average",
+        _format_power(power.average_estimated_system_watts, estimated=True),
+    )
+    table.add_row(
+        "Estimated system peak",
+        _format_power(power.peak_estimated_system_watts, estimated=True),
+    )
+    table.add_row(
+        "Estimated wall average",
+        _format_power(power.average_estimated_wall_watts, estimated=True),
+    )
+    table.add_row(
+        "Estimated wall peak",
+        _format_power(power.peak_estimated_wall_watts, estimated=True),
+    )
+    table.add_row(
+        "Estimated wall energy",
+        _format_energy(power.estimated_wall_energy_wh, estimated=True),
+    )
+    table.add_row(
+        "Estimated wall observed duration",
+        format_duration(power.estimated_wall_observed_duration_seconds),
+    )
+    table.add_row(
+        "Actual wall average",
+        _format_power(power.average_actual_wall_watts),
+    )
+    table.add_row("Actual wall peak", _format_power(power.peak_actual_wall_watts))
+    table.add_row("Actual wall energy", _format_energy(power.actual_wall_energy_wh))
+    table.add_row(
+        "Actual wall observed duration",
+        format_duration(power.actual_wall_observed_duration_seconds),
+    )
+    return table
+
+
+def _build_recent_power_samples_view(
+    samples: tuple[HistoricalSample, ...],
+) -> Table:
+    table = Table(title="Recent Power Samples", expand=True)
+    table.add_column("UTC timestamp")
+    table.add_column("CPU", justify="right")
+    table.add_column("GPU", justify="right")
+    table.add_column("CPU+GPU", justify="right")
+    table.add_column("Est. System", justify="right")
+    table.add_column("Est. Wall", justify="right")
+    table.add_column("Actual Wall", justify="right")
+    if not samples:
+        table.add_row("No samples", "—", "—", "—", "—", "—", "—")
+    else:
+        for sample in samples:
+            table.add_row(
+                _utc_text(sample.timestamp),
+                _format_power(sample.cpu_package_watts),
+                _format_power(sample.gpu_total_watts),
+                _format_power(sample.cpu_gpu_watts),
+                _format_power(sample.estimated_system_watts, estimated=True),
+                _format_power(sample.estimated_wall_watts, estimated=True),
+                _format_power(sample.actual_wall_watts),
+            )
+    return table
 
 
 def print_alert_history(events: tuple[AlertEvent, ...], database: str) -> None:

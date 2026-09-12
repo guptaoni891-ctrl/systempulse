@@ -17,6 +17,7 @@ from systempulse.models import (
     HistorySummary,
     NetworkSpeed,
     NetworkStats,
+    PowerHistorySummary,
     PowerSessionStats,
     PowerStats,
     ProcessStats,
@@ -327,6 +328,12 @@ def test_empty_history_and_alert_history_render_clear_states(monkeypatch):
 
     assert "No samples" in rendered
     assert "No events" in rendered
+    assert "Power History" in rendered
+    assert "Recent Power Samples" in rendered
+    assert "~0.0 Wh" in rendered
+    assert "Actual wall energy" in rendered
+    assert "0.0 Wh" in rendered
+    assert "0s" in rendered
 
 
 def test_history_summary_and_recent_samples_render_clear_network_semantics(monkeypatch):
@@ -359,6 +366,150 @@ def test_history_summary_and_recent_samples_render_clear_network_semantics(monke
     assert "2.00 KiB" in rendered
     assert "Recent Samples" in rendered
     assert "1.00 KiB/s" in rendered
+
+
+def test_filtered_power_history_and_recent_power_samples_render_supplied_values(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=180))
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    summary = HistorySummary(
+        period_start=start,
+        period_end=start,
+        sample_count=1,
+        average_cpu_percent=20.0,
+        peak_cpu_percent=20.0,
+        average_memory_percent=40.0,
+        peak_memory_percent=40.0,
+        average_disk_percent=60.0,
+        peak_disk_percent=60.0,
+        peak_cpu_temperature_celsius=None,
+        peak_gpu_temperature_celsius=None,
+        observed_network_sent_change_bytes=None,
+        observed_network_received_change_bytes=None,
+        alert_event_count=0,
+        power=PowerHistorySummary(
+            average_cpu_package_watts=31.2,
+            peak_cpu_package_watts=72.1,
+            average_gpu_total_watts=83.7,
+            peak_gpu_total_watts=241.4,
+            average_cpu_gpu_watts=114.9,
+            peak_cpu_gpu_watts=292.0,
+            average_estimated_system_watts=149.9,
+            peak_estimated_system_watts=327.0,
+            average_estimated_wall_watts=166.6,
+            peak_estimated_wall_watts=363.3,
+            average_actual_wall_watts=155.0,
+            peak_actual_wall_watts=350.0,
+            estimated_wall_energy_wh=1420.0,
+            actual_wall_energy_wh=999.9,
+            estimated_wall_observed_duration_seconds=30660.0,
+            actual_wall_observed_duration_seconds=3600.0,
+        ),
+    )
+    samples = (
+        HistoricalSample(
+            start,
+            20.0,
+            40.0,
+            60.0,
+            None,
+            1_024.0,
+            2_048.0,
+            1,
+            cpu_package_watts=11.1,
+            gpu_total_watts=22.2,
+            cpu_gpu_watts=33.3,
+            estimated_system_watts=44.4,
+            estimated_wall_watts=55.5,
+            actual_wall_watts=66.6,
+        ),
+    )
+
+    ui.print_history(summary, samples, "filtered.db")
+    rendered = output.getvalue()
+
+    assert "History database: filtered.db" in rendered
+    assert "Power History" in rendered
+    assert "CPU average" in rendered and "31.2 W" in rendered
+    assert "CPU peak" in rendered and "72.1 W" in rendered
+    assert "GPU average" in rendered and "83.7 W" in rendered
+    assert "GPU peak" in rendered and "241.4 W" in rendered
+    assert "CPU + GPU average" in rendered and "114.9 W" in rendered
+    assert "CPU + GPU peak" in rendered and "292.0 W" in rendered
+    assert "~31.2 W" not in rendered
+    assert "~83.7 W" not in rendered
+    assert "~114.9 W" not in rendered
+    assert "Estimated system average" in rendered and "~149.9 W" in rendered
+    assert "Estimated system peak" in rendered and "~327.0 W" in rendered
+    assert "Estimated wall average" in rendered and "~166.6 W" in rendered
+    assert "Estimated wall peak" in rendered and "~363.3 W" in rendered
+    assert "Estimated wall energy" in rendered and "~1.420 kWh" in rendered
+    assert "Estimated wall observed duration" in rendered and "8h 31m" in rendered
+    assert "Actual wall average" in rendered and "155.0 W" in rendered
+    assert "Actual wall peak" in rendered and "350.0 W" in rendered
+    assert "~155.0 W" not in rendered
+    assert "~350.0 W" not in rendered
+    assert "Actual wall energy" in rendered and "999.9 Wh" in rendered
+    assert "~999.9 Wh" not in rendered
+    assert "Actual wall observed duration" in rendered and "1h 0m" in rendered
+    assert "Recent Power Samples" in rendered
+    assert "Est. System" in rendered
+    assert "Est. Wall" in rendered
+    assert "11.1 W" in rendered and "~11.1 W" not in rendered
+    assert "22.2 W" in rendered and "~22.2 W" not in rendered
+    assert "33.3 W" in rendered and "~33.3 W" not in rendered
+    assert "~44.4 W" in rendered
+    assert "~55.5 W" in rendered
+    assert "66.6 W" in rendered and "~66.6 W" not in rendered
+
+
+def test_power_history_preserves_zero_and_unavailable_semantics(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=180))
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    summary = HistorySummary(
+        period_start=start,
+        period_end=start,
+        sample_count=1,
+        average_cpu_percent=0.0,
+        peak_cpu_percent=0.0,
+        average_memory_percent=0.0,
+        peak_memory_percent=0.0,
+        average_disk_percent=0.0,
+        peak_disk_percent=0.0,
+        peak_cpu_temperature_celsius=None,
+        peak_gpu_temperature_celsius=None,
+        observed_network_sent_change_bytes=None,
+        observed_network_received_change_bytes=None,
+        alert_event_count=0,
+        power=PowerHistorySummary(
+            average_cpu_package_watts=0.0,
+            peak_cpu_package_watts=0.0,
+            estimated_wall_energy_wh=236.4,
+        ),
+    )
+    samples = (
+        HistoricalSample(
+            start,
+            0.0,
+            0.0,
+            0.0,
+            None,
+            0.0,
+            0.0,
+            0,
+            cpu_package_watts=0.0,
+        ),
+    )
+
+    ui.print_history(summary, samples, "filtered.db")
+    rendered = output.getvalue()
+
+    assert "CPU average" in rendered
+    assert "0.0 W" in rendered
+    assert "~236.4 Wh" in rendered
+    assert "Unavailable" in rendered
+    assert "Recent Power Samples" in rendered
 
 
 def test_persisted_alert_history_renders_events(monkeypatch):
