@@ -168,6 +168,26 @@ class ActiveAlert:
 
 
 @dataclass(frozen=True, slots=True)
+class PowerHistorySummary:
+    average_cpu_package_watts: float | None = None
+    peak_cpu_package_watts: float | None = None
+    average_gpu_total_watts: float | None = None
+    peak_gpu_total_watts: float | None = None
+    average_cpu_gpu_watts: float | None = None
+    peak_cpu_gpu_watts: float | None = None
+    average_estimated_system_watts: float | None = None
+    peak_estimated_system_watts: float | None = None
+    average_estimated_wall_watts: float | None = None
+    peak_estimated_wall_watts: float | None = None
+    average_actual_wall_watts: float | None = None
+    peak_actual_wall_watts: float | None = None
+    estimated_wall_energy_wh: float = 0.0
+    actual_wall_energy_wh: float = 0.0
+    estimated_wall_observed_duration_seconds: float = 0.0
+    actual_wall_observed_duration_seconds: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class HistorySummary:
     period_start: datetime | None
     period_end: datetime | None
@@ -183,6 +203,7 @@ class HistorySummary:
     observed_network_sent_change_bytes: int | None
     observed_network_received_change_bytes: int | None
     alert_event_count: int
+    power: PowerHistorySummary = field(default_factory=PowerHistorySummary)
 
     def __post_init__(self) -> None:
         if self.period_start is not None:

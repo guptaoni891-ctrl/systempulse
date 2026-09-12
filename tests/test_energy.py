@@ -4,6 +4,7 @@ import pytest
 
 from systempulse.energy import (
     EnergyIntegration,
+    PowerEnergyAccumulator,
     integrate_datetime_power_samples,
     integrate_power_samples,
 )
@@ -18,6 +19,20 @@ from systempulse.energy import (
 )
 def test_fewer_than_two_samples_produce_no_energy_or_observed_duration(samples):
     assert integrate_power_samples(samples) == EnergyIntegration(0.0, 0.0)
+
+
+def test_running_accumulator_exposes_incremental_energy_and_duration():
+    accumulator = PowerEnergyAccumulator()
+
+    assert accumulator.energy_wh == 0.0
+    assert accumulator.observed_duration_seconds == 0.0
+    accumulator.observe(0.0, 100.0)
+    accumulator.observe(1800.0, 200.0)
+    accumulator.observe(5400.0, 50.0)
+
+    assert accumulator.energy_wh == 200.0
+    assert accumulator.observed_duration_seconds == 5400.0
+    assert accumulator.result == EnergyIntegration(200.0, 5400.0)
 
 
 def test_constant_load_uses_elapsed_time():

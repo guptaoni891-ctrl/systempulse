@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Iterable
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from systempulse.energy import EnergyIntegration, PowerEnergyAccumulator
 from systempulse.models import (
     AlertEvent,
     AlertSeverity,
     AlertTransition,
     HistoricalSample,
     HistorySummary,
+    PowerHistorySummary,
     SystemSnapshot,
 )
 
@@ -90,6 +93,14 @@ _VERSION_2_MIGRATION_STATEMENTS = tuple(
         ("actual_wall_watts", "REAL"),
         ("cpu_power_source", "TEXT"),
     )
+)
+_POWER_METRIC_COLUMNS = (
+    "cpu_package_watts",
+    "gpu_total_watts",
+    "cpu_gpu_watts",
+    "estimated_system_watts",
+    "estimated_wall_watts",
+    "actual_wall_watts",
 )
 
 
@@ -285,6 +296,24 @@ class HistoryStore:
                     parameters,
                 ).fetchone()
                 network_change = self._network_change(connection, clause, parameters)
+                power_summary = _power_history_summary(
+                    connection.execute(
+                        f"""
+                        SELECT
+                            timestamp_utc,
+                            cpu_package_watts,
+                            gpu_total_watts,
+                            cpu_gpu_watts,
+                            estimated_system_watts,
+                            estimated_wall_watts,
+                            actual_wall_watts
+                        FROM snapshots
+                        {clause}
+                        ORDER BY timestamp_utc ASC, id ASC
+                        """,
+                        parameters,
+                    )
+                )
         except sqlite3.Error as error:
             raise self._database_error("query history summary", error) from error
 
@@ -304,6 +333,7 @@ class HistoryStore:
             observed_network_sent_change_bytes=network_change[0],
             observed_network_received_change_bytes=network_change[1],
             alert_event_count=int(alert_row["event_count"]),
+            power=power_summary,
         )
 
     def recent_samples(
@@ -593,6 +623,55 @@ def _optional_float(value: object) -> float | None:
     if not isinstance(value, (str, bytes, int, float)):
         raise HistoryError(f"History database contains an invalid number: {value!r}.")
     return float(value)
+
+
+def _power_history_summary(rows: Iterable[sqlite3.Row]) -> PowerHistorySummary:
+    accumulators = {column: PowerEnergyAccumulator() for column in _POWER_METRIC_COLUMNS}
+    peaks: dict[str, float | None] = dict.fromkeys(_POWER_METRIC_COLUMNS)
+    origin: datetime | None = None
+
+    for row in rows:
+        timestamp = _required_timestamp(row["timestamp_utc"])
+        if origin is None:
+            origin = timestamp
+        elapsed_seconds = (timestamp - origin).total_seconds()
+        for column in _POWER_METRIC_COLUMNS:
+            watts = _optional_float(row[column])
+            accumulators[column].observe(elapsed_seconds, watts)
+            if watts is not None and math.isfinite(watts) and watts >= 0.0:
+                peak = peaks[column]
+                if peak is None or watts > peak:
+                    peaks[column] = watts
+
+    integrations = {column: accumulator.result for column, accumulator in accumulators.items()}
+    estimated_wall = integrations["estimated_wall_watts"]
+    actual_wall = integrations["actual_wall_watts"]
+    return PowerHistorySummary(
+        average_cpu_package_watts=_time_weighted_average(integrations["cpu_package_watts"]),
+        peak_cpu_package_watts=peaks["cpu_package_watts"],
+        average_gpu_total_watts=_time_weighted_average(integrations["gpu_total_watts"]),
+        peak_gpu_total_watts=peaks["gpu_total_watts"],
+        average_cpu_gpu_watts=_time_weighted_average(integrations["cpu_gpu_watts"]),
+        peak_cpu_gpu_watts=peaks["cpu_gpu_watts"],
+        average_estimated_system_watts=_time_weighted_average(
+            integrations["estimated_system_watts"]
+        ),
+        peak_estimated_system_watts=peaks["estimated_system_watts"],
+        average_estimated_wall_watts=_time_weighted_average(estimated_wall),
+        peak_estimated_wall_watts=peaks["estimated_wall_watts"],
+        average_actual_wall_watts=_time_weighted_average(actual_wall),
+        peak_actual_wall_watts=peaks["actual_wall_watts"],
+        estimated_wall_energy_wh=estimated_wall.energy_wh,
+        actual_wall_energy_wh=actual_wall.energy_wh,
+        estimated_wall_observed_duration_seconds=estimated_wall.observed_duration_seconds,
+        actual_wall_observed_duration_seconds=actual_wall.observed_duration_seconds,
+    )
+
+
+def _time_weighted_average(integration: EnergyIntegration) -> float | None:
+    if integration.observed_duration_seconds <= 0.0:
+        return None
+    return integration.energy_wh * 3600.0 / integration.observed_duration_seconds
 
 
 def _counter_change(first: int, last: int) -> int | None:
