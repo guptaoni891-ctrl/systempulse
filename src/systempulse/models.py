@@ -27,6 +27,25 @@ class PowerStats:
 
 
 @dataclass(frozen=True, slots=True)
+class PowerSessionStats:
+    session_duration_seconds: float = 0.0
+    current_cpu_package_watts: float | None = None
+    current_gpu_total_watts: float | None = None
+    current_cpu_gpu_watts: float | None = None
+    current_estimated_system_watts: float | None = None
+    current_estimated_wall_watts: float | None = None
+    average_estimated_wall_watts: float | None = None
+    peak_estimated_wall_watts: float | None = None
+    estimated_wall_energy_wh: float = 0.0
+    estimated_wall_observed_duration_seconds: float = 0.0
+    current_actual_wall_watts: float | None = None
+    average_actual_wall_watts: float | None = None
+    peak_actual_wall_watts: float | None = None
+    actual_wall_energy_wh: float = 0.0
+    actual_wall_observed_duration_seconds: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkStats:
     bytes_sent: int
     bytes_received: int

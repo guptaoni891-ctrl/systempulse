@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from io import StringIO
 
+import pytest
 from rich.console import Console
 
 import systempulse.ui as ui
@@ -16,11 +17,12 @@ from systempulse.models import (
     HistorySummary,
     NetworkSpeed,
     NetworkStats,
+    PowerSessionStats,
     PowerStats,
     ProcessStats,
     SystemSnapshot,
 )
-from systempulse.ui import build_snapshot_view
+from systempulse.ui import build_snapshot_view, format_duration
 
 
 def _snapshot():
@@ -46,6 +48,7 @@ def _render(
     active_alerts=None,
     config=None,
     history_warning=None,
+    power_session=None,
 ):
     output = StringIO()
     console = Console(file=output, force_terminal=False, width=120)
@@ -56,6 +59,7 @@ def _render(
             show_network_speed=show_network_speed,
             active_alerts=active_alerts,
             history_warning=history_warning,
+            power_session=power_session,
         )
     )
     return output.getvalue()
@@ -78,6 +82,7 @@ def test_one_time_snapshot_preserves_hidden_rate_rows():
     assert "Upload" not in rendered
     assert "Download" not in rendered
     assert "Alerts" not in rendered
+    assert "Power Session" not in rendered
 
 
 def test_live_alert_section_has_compact_healthy_state():
@@ -199,6 +204,88 @@ def test_power_panel_renders_unavailable_instead_of_zero_for_missing_cpu_power()
     assert "CPU Package" in rendered
     assert "Unavailable" in rendered
     assert "~0.0 W" not in rendered
+
+
+def test_live_power_session_distinguishes_estimated_and_actual_values():
+    rendered = _render(
+        show_network_speed=True,
+        power_session=PowerSessionStats(
+            session_duration_seconds=3661.0,
+            current_cpu_package_watts=31.2,
+            current_gpu_total_watts=108.4,
+            current_cpu_gpu_watts=139.6,
+            current_estimated_system_watts=174.6,
+            current_estimated_wall_watts=194.0,
+            average_estimated_wall_watts=151.8,
+            peak_estimated_wall_watts=286.4,
+            estimated_wall_energy_wh=251.0,
+            estimated_wall_observed_duration_seconds=3540.0,
+            current_actual_wall_watts=210.0,
+            average_actual_wall_watts=180.0,
+            peak_actual_wall_watts=240.0,
+            actual_wall_energy_wh=200.0,
+            actual_wall_observed_duration_seconds=3000.0,
+        ),
+    )
+
+    assert "Power Session" in rendered
+    assert "Current CPU" in rendered and "31.2 W" in rendered
+    assert "Current GPU" in rendered and "108.4 W" in rendered
+    assert "Estimated System" in rendered and "~174.6 W" in rendered
+    assert "Average Estimated Wall" in rendered and "~151.8 W" in rendered
+    assert "Peak Estimated Wall" in rendered and "~286.4 W" in rendered
+    assert "Estimated Energy Used" in rendered and "~251.0 Wh" in rendered
+    assert "Actual Wall" in rendered and "210.0 W" in rendered
+    assert "~210.0 W" not in rendered
+    assert "Actual Energy Used" in rendered and "200.0 Wh" in rendered
+    assert "~200.0 Wh" not in rendered
+    assert "1h 1m" in rendered
+    assert "59m 0s" in rendered
+
+
+def test_session_energy_switches_between_wh_and_kwh_at_threshold():
+    rendered = _render(
+        show_network_speed=True,
+        power_session=PowerSessionStats(
+            peak_estimated_wall_watts=100.0,
+            estimated_wall_energy_wh=1236.0,
+            current_actual_wall_watts=100.0,
+            peak_actual_wall_watts=100.0,
+            actual_wall_energy_wh=236.4,
+        ),
+    )
+
+    assert "~1.236 kWh" in rendered
+    assert "236.4 Wh" in rendered
+
+
+def test_session_with_no_actual_telemetry_renders_safe_unavailable_state():
+    rendered = _render(
+        show_network_speed=True,
+        power_session=PowerSessionStats(),
+    )
+
+    assert "Power Session" in rendered
+    assert "Actual Wall" in rendered
+    assert "Unavailable" in rendered
+    assert "Average Actual Wall" not in rendered
+    assert "Actual Energy Used" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("seconds", "formatted"),
+    [
+        (0.0, "0s"),
+        (59.9, "59s"),
+        (60.0, "1m 0s"),
+        (3661.0, "1h 1m"),
+        (90061.0, "1d 1h"),
+        (-1.0, "0s"),
+        (float("nan"), "0s"),
+    ],
+)
+def test_duration_formatter_is_compact_and_safe(seconds, formatted):
+    assert format_duration(seconds) == formatted
 
 
 def test_process_table_and_warning_panel_render(monkeypatch):

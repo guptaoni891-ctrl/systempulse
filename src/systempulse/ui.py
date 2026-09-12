@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from rich.console import Console, Group, RenderableType
@@ -14,6 +15,7 @@ from systempulse.models import (
     AlertSeverity,
     HistoricalSample,
     HistorySummary,
+    PowerSessionStats,
     ProcessStats,
     SystemSnapshot,
 )
@@ -40,6 +42,7 @@ def build_snapshot_view(
     show_network_speed: bool = False,
     active_alerts: tuple[ActiveAlert, ...] | None = None,
     history_warning: str | None = None,
+    power_session: PowerSessionStats | None = None,
 ) -> Group:
     thresholds = config.thresholds
     display_timestamp = snapshot.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
@@ -165,11 +168,97 @@ def build_snapshot_view(
     power_table.add_row("Actual Wall", watts(power.actual_wall_watts), "External provider")
 
     renderables: list[RenderableType] = [table, gpu_table, power_table]
+    if power_session is not None:
+        renderables.append(_build_power_session_view(power_session))
     if active_alerts is not None:
         renderables.append(_build_alerts_view(active_alerts, enabled=config.alerts.enabled))
     if history_warning is not None:
         renderables.append(Panel(history_warning, title="History warning", style="yellow"))
     return Group(*renderables)
+
+
+def _build_power_session_view(session: PowerSessionStats) -> Table:
+    table = Table(title="Power Session", expand=True)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Current CPU", _session_watts(session.current_cpu_package_watts))
+    table.add_row("Current GPU", _session_watts(session.current_gpu_total_watts))
+    table.add_row("Current CPU + GPU", _session_watts(session.current_cpu_gpu_watts))
+    table.add_row(
+        "Estimated System",
+        _session_watts(session.current_estimated_system_watts, estimated=True),
+    )
+    table.add_row(
+        "Estimated Wall",
+        _session_watts(session.current_estimated_wall_watts, estimated=True),
+    )
+    table.add_row(
+        "Average Estimated Wall",
+        _session_watts(session.average_estimated_wall_watts, estimated=True),
+    )
+    table.add_row(
+        "Peak Estimated Wall",
+        _session_watts(session.peak_estimated_wall_watts, estimated=True),
+    )
+    table.add_row("Session Duration", format_duration(session.session_duration_seconds))
+    table.add_row(
+        "Estimated Observed Duration",
+        format_duration(session.estimated_wall_observed_duration_seconds),
+    )
+    table.add_row(
+        "Estimated Energy Used",
+        _session_energy(session.estimated_wall_energy_wh, estimated=True),
+    )
+
+    if session.peak_actual_wall_watts is None:
+        table.add_row("Actual Wall", "Unavailable")
+    else:
+        table.add_row("Actual Wall", _session_watts(session.current_actual_wall_watts))
+        table.add_row(
+            "Average Actual Wall",
+            _session_watts(session.average_actual_wall_watts),
+        )
+        table.add_row("Peak Actual Wall", _session_watts(session.peak_actual_wall_watts))
+        table.add_row(
+            "Actual Observed Duration",
+            format_duration(session.actual_wall_observed_duration_seconds),
+        )
+        table.add_row(
+            "Actual Energy Used",
+            _session_energy(session.actual_wall_energy_wh),
+        )
+    return table
+
+
+def _session_watts(value: float | None, *, estimated: bool = False) -> str:
+    if value is None:
+        return "Unavailable"
+    prefix = "~" if estimated else ""
+    return f"{prefix}{value:.1f} W"
+
+
+def _session_energy(energy_wh: float, *, estimated: bool = False) -> str:
+    prefix = "~" if estimated else ""
+    if energy_wh < 1000.0:
+        return f"{prefix}{energy_wh:.1f} Wh"
+    return f"{prefix}{energy_wh / 1000.0:.3f} kWh"
+
+
+def format_duration(duration_seconds: float) -> str:
+    """Format a non-negative duration without noisy fractional seconds."""
+    if not math.isfinite(duration_seconds) or duration_seconds <= 0.0:
+        return "0s"
+    total_seconds = int(duration_seconds)
+    days, remainder = divmod(total_seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
 
 
 def _build_alerts_view(

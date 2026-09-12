@@ -28,6 +28,16 @@ class FakeLive:
 
 def _capture_live(monkeypatch):
     instances = []
+    power_trackers = []
+
+    class FakePowerSessionTracker:
+        def __init__(self):
+            self.observations = []
+            power_trackers.append(self)
+
+        def observe(self, snapshot, sampled_monotonic):
+            self.observations.append((snapshot, sampled_monotonic))
+            return f"power session {len(self.observations)}"
 
     def factory(renderable, **kwargs):
         instance = FakeLive(renderable, **kwargs)
@@ -35,7 +45,8 @@ def _capture_live(monkeypatch):
         return instance
 
     monkeypatch.setattr(monitor, "Live", factory)
-    return instances
+    monkeypatch.setattr(monitor, "PowerSessionTracker", FakePowerSessionTracker)
+    return instances, power_trackers
 
 
 def _service(interval, snapshots):
@@ -49,11 +60,11 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
     snapshots = [object(), object(), object()]
     service = _service(1.5, snapshots)
     sleep = Mock(side_effect=[None, None, KeyboardInterrupt])
-    monotonic = Mock(side_effect=[10.0, 10.0, 11.5, 11.5, 13.0, 13.0])
+    monotonic = Mock(side_effect=[10.0, 10.0, 11.5, 11.5, 11.5, 13.0, 13.0, 13.0])
     build = Mock(side_effect=["initial view", "second view", "third view"])
     alert_engine = Mock()
     alert_engine.active_alerts = ()
-    instances = _capture_live(monkeypatch)
+    instances, power_trackers = _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", build)
 
     monitor.live_monitor(
@@ -72,6 +83,7 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
             show_network_speed=True,
             active_alerts=(),
             history_warning=None,
+            power_session="power session 1",
         ),
         call(
             snapshots[1],
@@ -79,6 +91,7 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
             show_network_speed=True,
             active_alerts=(),
             history_warning=None,
+            power_session="power session 2",
         ),
         call(
             snapshots[2],
@@ -86,12 +99,18 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
             show_network_speed=True,
             active_alerts=(),
             history_warning=None,
+            power_session="power session 3",
         ),
     ]
     assert alert_engine.evaluate.mock_calls == [
         call(snapshots[0]),
         call(snapshots[1]),
         call(snapshots[2]),
+    ]
+    assert power_trackers[0].observations == [
+        (snapshots[0], 10.0),
+        (snapshots[1], 11.5),
+        (snapshots[2], 13.0),
     ]
     assert len(instances) == 1
     assert instances[0].renderable == "initial view"
@@ -104,7 +123,7 @@ def test_live_monitor_renders_authoritative_service_samples(monkeypatch):
 def test_slow_collection_skips_missed_ticks_without_schedule_drift(monkeypatch):
     service = _service(2.0, [object(), object()])
     sleep = Mock(side_effect=[None, KeyboardInterrupt])
-    monotonic = Mock(side_effect=[0.0, 0.0, 5.0, 5.0])
+    monotonic = Mock(side_effect=[0.0, 0.0, 5.0, 5.0, 5.0])
     _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
@@ -125,7 +144,7 @@ def test_refresh_interval_is_clamped_and_keyboard_interrupt_is_graceful(monkeypa
     service = _service(0.1, [object()])
     sleep = Mock(side_effect=KeyboardInterrupt)
     monotonic = Mock(side_effect=[10.0, 10.0])
-    instances = _capture_live(monkeypatch)
+    instances, _ = _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
     result = monitor.live_monitor(
@@ -144,7 +163,7 @@ def test_refresh_interval_is_clamped_and_keyboard_interrupt_is_graceful(monkeypa
 
 def test_keyboard_interrupt_during_initial_sample_does_not_open_live_display(monkeypatch):
     service = _service(1.0, [KeyboardInterrupt])
-    instances = _capture_live(monkeypatch)
+    instances, _ = _capture_live(monkeypatch)
 
     result = monitor.live_monitor(
         service,
@@ -167,7 +186,7 @@ def test_live_monitor_persists_each_authoritative_sample_with_same_cycle_events(
     alert_engine.evaluate.side_effect = events
     history_store = Mock()
     sleep = Mock(side_effect=[None, KeyboardInterrupt])
-    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0])
+    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0, 1.0])
     _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", Mock(return_value="view"))
 
@@ -194,7 +213,7 @@ def test_history_failure_is_shown_once_and_disables_later_writes(monkeypatch):
     history_store = Mock()
     history_store.record_sample.side_effect = HistoryError("database unavailable")
     sleep = Mock(side_effect=[None, KeyboardInterrupt])
-    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0])
+    monotonic = Mock(side_effect=[0.0, 0.0, 1.0, 1.0, 1.0])
     build = Mock(return_value="view")
     _capture_live(monkeypatch)
     monkeypatch.setattr(monitor, "build_snapshot_view", build)
