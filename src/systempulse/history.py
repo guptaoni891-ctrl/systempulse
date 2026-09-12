@@ -15,7 +15,7 @@ from systempulse.models import (
     SystemSnapshot,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_STATEMENTS = (
     """
@@ -70,6 +70,27 @@ _SCHEMA_STATEMENTS = (
 )
 
 _REQUIRED_TABLES = {"snapshots", "gpu_samples", "alert_events"}
+_VERSION_2_SNAPSHOT_COLUMNS = {
+    "cpu_package_watts",
+    "gpu_total_watts",
+    "cpu_gpu_watts",
+    "estimated_system_watts",
+    "estimated_wall_watts",
+    "actual_wall_watts",
+    "cpu_power_source",
+}
+_VERSION_2_MIGRATION_STATEMENTS = tuple(
+    f"ALTER TABLE snapshots ADD COLUMN {column} {column_type}"
+    for column, column_type in (
+        ("cpu_package_watts", "REAL"),
+        ("gpu_total_watts", "REAL"),
+        ("cpu_gpu_watts", "REAL"),
+        ("estimated_system_watts", "REAL"),
+        ("estimated_wall_watts", "REAL"),
+        ("actual_wall_watts", "REAL"),
+        ("cpu_power_source", "TEXT"),
+    )
+)
 
 
 class HistoryError(RuntimeError):
@@ -123,8 +144,15 @@ class HistoryStore:
                         network_bytes_sent,
                         network_bytes_received,
                         upload_bytes_per_second,
-                        download_bytes_per_second
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        download_bytes_per_second,
+                        cpu_package_watts,
+                        gpu_total_watts,
+                        cpu_gpu_watts,
+                        estimated_system_watts,
+                        estimated_wall_watts,
+                        actual_wall_watts,
+                        cpu_power_source
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         _timestamp_text(snapshot.timestamp),
@@ -140,6 +168,13 @@ class HistoryStore:
                         snapshot.network.bytes_received,
                         snapshot.network_speed.upload_bytes_per_second,
                         snapshot.network_speed.download_bytes_per_second,
+                        snapshot.power.cpu_package_watts,
+                        snapshot.power.gpu_total_watts,
+                        snapshot.power.cpu_gpu_watts,
+                        snapshot.power.estimated_system_watts,
+                        snapshot.power.estimated_wall_watts,
+                        snapshot.power.actual_wall_watts,
+                        snapshot.power.cpu_source,
                     ),
                 )
                 snapshot_id = cursor.lastrowid
@@ -291,6 +326,13 @@ class HistoryStore:
                         sample.cpu_temperature_celsius,
                         sample.upload_bytes_per_second,
                         sample.download_bytes_per_second,
+                        sample.cpu_package_watts,
+                        sample.gpu_total_watts,
+                        sample.cpu_gpu_watts,
+                        sample.estimated_system_watts,
+                        sample.estimated_wall_watts,
+                        sample.actual_wall_watts,
+                        sample.cpu_power_source,
                         COUNT(gpu.gpu_index) AS gpu_count
                     FROM snapshots AS sample
                     LEFT JOIN gpu_samples AS gpu ON gpu.snapshot_id = sample.id
@@ -314,6 +356,13 @@ class HistoryStore:
                 upload_bytes_per_second=float(row["upload_bytes_per_second"]),
                 download_bytes_per_second=float(row["download_bytes_per_second"]),
                 gpu_count=int(row["gpu_count"]),
+                cpu_package_watts=_optional_float(row["cpu_package_watts"]),
+                gpu_total_watts=_optional_float(row["gpu_total_watts"]),
+                cpu_gpu_watts=_optional_float(row["cpu_gpu_watts"]),
+                estimated_system_watts=_optional_float(row["estimated_system_watts"]),
+                estimated_wall_watts=_optional_float(row["estimated_wall_watts"]),
+                actual_wall_watts=_optional_float(row["actual_wall_watts"]),
+                cpu_power_source=row["cpu_power_source"],
             )
             for row in rows
         )
@@ -391,6 +440,9 @@ class HistoryStore:
                     )
                 if version == 0:
                     self._migrate_to_version_1(connection)
+                    version = 1
+                if version == 1:
+                    self._migrate_to_version_2(connection)
                 self._validate_schema(connection)
         except UnsupportedSchemaVersionError:
             raise
@@ -402,7 +454,18 @@ class HistoryStore:
             connection.execute("BEGIN IMMEDIATE")
             for statement in _SCHEMA_STATEMENTS:
                 connection.execute(statement)
-            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.execute("PRAGMA user_version = 1")
+            connection.commit()
+        except sqlite3.Error:
+            connection.rollback()
+            raise
+
+    def _migrate_to_version_2(self, connection: sqlite3.Connection) -> None:
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for statement in _VERSION_2_MIGRATION_STATEMENTS:
+                connection.execute(statement)
+            connection.execute("PRAGMA user_version = 2")
             connection.commit()
         except sqlite3.Error:
             connection.rollback()
@@ -418,8 +481,17 @@ class HistoryStore:
         if missing:
             names = ", ".join(missing)
             raise HistoryError(
-                f"History database {self.path} has an incomplete version 1 schema; "
+                f"History database {self.path} has an incomplete version 2 schema; "
                 f"missing table(s): {names}."
+            )
+        snapshot_rows = connection.execute("PRAGMA table_info(snapshots)").fetchall()
+        snapshot_columns = {row["name"] for row in snapshot_rows}
+        missing_columns = sorted(_VERSION_2_SNAPSHOT_COLUMNS - snapshot_columns)
+        if missing_columns:
+            names = ", ".join(missing_columns)
+            raise HistoryError(
+                f"History database {self.path} has an incomplete version 2 schema; "
+                f"snapshots is missing column(s): {names}."
             )
 
     def _connect(self) -> sqlite3.Connection:

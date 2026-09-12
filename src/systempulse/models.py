@@ -209,6 +209,13 @@ class HistoricalSample:
     upload_bytes_per_second: float
     download_bytes_per_second: float
     gpu_count: int
+    cpu_package_watts: float | None = None
+    gpu_total_watts: float | None = None
+    cpu_gpu_watts: float | None = None
+    estimated_system_watts: float | None = None
+    estimated_wall_watts: float | None = None
+    actual_wall_watts: float | None = None
+    cpu_power_source: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
