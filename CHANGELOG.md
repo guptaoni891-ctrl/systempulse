@@ -6,6 +6,20 @@ for release planning.
 
 ## [Unreleased]
 
+### Added
+
+- Snapshot-level measured and explicitly estimated power telemetry, with optional Windows CPU
+  package readings from LibreHardwareMonitor and aggregate NVIDIA GPU power.
+- Shared trapezoidal energy integration for live Power Session and SQLite Power History views,
+  including time-weighted averages, peaks, energy, and telemetry-aware observed durations.
+- Power fields in new CSV exports and instantaneous snapshot-level Prometheus power gauges.
+
+### Changed
+
+- Advanced SQLite history to schema version 2 with an automatic in-place migration that preserves
+  existing schema-v1 snapshots, GPUs, and alert events.
+- Preserved exact legacy V1 CSV append compatibility while rejecting unknown headers.
+
 ## [2.0.0] - 2026-08-28
 
 ### Added

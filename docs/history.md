@@ -36,6 +36,8 @@ A history-enabled live session stores:
 - The authoritative UTC timestamp and core CPU, memory, disk, temperature, and network fields.
 - The sample's calculated upload and download rates.
 - One normalized child row for every GPU in the snapshot, including optional power.
+- Snapshot-level CPU package, aggregate GPU, combined CPU + GPU, estimated system, estimated wall,
+  actual wall, and CPU power-source fields.
 - Alert transition events produced from that same snapshot.
 
 The snapshot, all GPU rows, and all same-cycle alert events are committed in one transaction. This
@@ -46,10 +48,15 @@ write to SQLite. The interactive menu writes only when its live-dashboard option
 
 ## Schema versioning
 
-The current database schema version is 1. SystemPulse records the version through SQLite's schema
-version mechanism, creates the initial schema transactionally, validates required tables and
+The current database schema version is 2. SystemPulse records the version through SQLite's schema
+version mechanism, creates and migrates schemas transactionally, validates required tables and
 columns, and rejects databases created by a newer unsupported schema instead of guessing how to
 read them.
+
+An existing schema-v1 database is migrated automatically in place. Existing snapshot, GPU, and
+alert data is preserved; the seven new snapshot power columns are added and are `NULL` (displayed
+as unavailable) for old rows. The database is not rebuilt. Schema versions newer than 2 continue
+to be rejected rather than opened with assumptions about their layout.
 
 The schema separates snapshots, GPU samples, and alert events. This supports multiple GPUs without
 duplicating snapshot-level metrics. Internal SQL and table layouts are implementation details and
@@ -87,8 +94,35 @@ systempulse alerts --history --limit 50
 - `--hours` and `--days` filter from the current UTC time and cannot be combined.
 - `--limit` controls the number of recent rows displayed, not the summary aggregation.
 - `history` shows aggregate CPU, memory, disk, temperature, network-change, GPU, and alert-event
-  information plus recent samples.
+  information, a Power History panel, and recent samples including their power fields.
 - `alerts --history` reads durable transition events; it does not restore active in-memory alerts.
+
+## Power history and energy
+
+Power History reports time-weighted averages and peaks for measured and derived power fields,
+estimated- and actual-wall energy, and separate observed durations. The averages and energy are
+calculated only from the timestamped values persisted in SQLite; current configuration is not used
+to recompute old estimates.
+
+For each pair of consecutive valid readings, SystemPulse applies trapezoidal integration:
+
+```text
+energy_Wh += ((P1 + P2) / 2) * elapsed_seconds / 3600
+```
+
+One Wh is one watt sustained for one hour, and 1000 Wh is 1 kWh. The time-weighted average is the
+integrated energy divided by observed time. A lone reading can establish a peak, but it has no
+interval and therefore contributes no energy or average.
+
+Unavailable, negative, or non-finite readings break the series. If 100 W is recorded at 00:00,
+power is unavailable at 00:30, and 100 W returns at 01:00, SystemPulse integrates no energy across
+that gap. **Observed Duration** counts only intervals bounded by consecutive valid readings and can
+therefore be shorter than the selected period.
+
+`--hours` and `--days` filtering is conservative. Samples before the UTC cutoff are excluded
+entirely, so a sample before the cutoff is never joined to one after it to create an interval that
+crosses into the selected period. Estimated-wall and actual-wall series are integrated
+independently.
 
 ## Network counter-change semantics
 
