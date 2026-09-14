@@ -9,6 +9,7 @@ from rich.table import Table
 from rich.text import Text
 
 from systempulse.config import AppConfig
+from systempulse.internet_speed import InternetSpeedResult
 from systempulse.models import (
     ActiveAlert,
     AlertEvent,
@@ -314,6 +315,32 @@ def print_processes(processes: list[ProcessStats]) -> None:
         )
 
     console.print(table)
+
+
+def print_internet_speedtest(result: InternetSpeedResult) -> None:
+    table = Table(title="Internet Speed Test", show_header=False, expand=False)
+    table.add_column("Metric", style="bold")
+    table.add_column("Value", justify="right")
+    table.add_row("Download", f"{result.download_mbps:.1f} Mbps")
+    table.add_row("Upload", f"{result.upload_mbps:.1f} Mbps")
+    table.add_row("Ping", f"{result.ping_ms:.1f} ms")
+    table.add_row("Server", Text(_internet_speed_server(result)))
+    console.print(table)
+
+
+def _internet_speed_server(result: InternetSpeedResult) -> str:
+    location = ", ".join(
+        value for value in (result.server_name, result.server_country) if value is not None
+    )
+    if result.server_sponsor and location:
+        return f"{result.server_sponsor} — {location}"
+    if result.server_sponsor:
+        return result.server_sponsor
+    if location:
+        return location
+    if result.server_id:
+        return f"Server {result.server_id}"
+    return "Unavailable"
 
 
 def print_history(

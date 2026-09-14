@@ -21,6 +21,7 @@ from systempulse.config import (
 )
 from systempulse.exporter import ExporterError, serve_exporter
 from systempulse.history import HistoryError, HistoryStore
+from systempulse.internet_speed import InternetSpeedTestError, run_internet_speedtest
 from systempulse.logger import save_snapshot
 from systempulse.monitor import live_monitor
 from systempulse.paths import resolve_config_path, user_config_path
@@ -30,6 +31,7 @@ from systempulse.ui import (
     console,
     print_alert_history,
     print_history,
+    print_internet_speedtest,
     print_processes,
     print_snapshot,
 )
@@ -95,12 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
     process_parser = subparsers.add_parser("processes", help="Show top CPU processes.")
     process_parser.add_argument("--limit", type=int, help="Number of processes to show.")
 
-    network_parser = subparsers.add_parser("network", help="Show network usage or speed.")
+    network_parser = subparsers.add_parser(
+        "network",
+        help="Show local network usage or throughput.",
+    )
     network_parser.add_argument(
         "--speed",
         action="store_true",
-        help="Measure upload and download speed.",
+        help="Measure current local upload and download throughput.",
     )
+    subparsers.add_parser("speedtest", help="Run an internet connection speed test.")
 
     save_parser = subparsers.add_parser("save", help="Save a system snapshot to CSV.")
     save_parser.add_argument("--output", help="Override the configured CSV path.")
@@ -163,6 +169,10 @@ def _save(service: MonitorService, output: str | None = None) -> None:
     csv_path = output or service.config.logging.csv_path
     path = save_snapshot(snapshot, csv_path)
     console.print(f"Saved reading to [bold]{path.resolve()}[/bold]")
+
+
+def _run_internet_speedtest() -> None:
+    print_internet_speedtest(run_internet_speedtest())
 
 
 def _print_config(config: AppConfig) -> None:
@@ -275,12 +285,13 @@ def interactive_menu(
             "2. Live monitoring\n"
             "3. Show top CPU processes\n"
             "4. Show network totals\n"
-            "5. Measure network speed\n"
-            "6. Save reading to CSV\n"
-            "7. Show loaded config\n"
-            "8. Exit"
+            "5. Measure current network throughput\n"
+            "6. Run internet speed test\n"
+            "7. Save reading to CSV\n"
+            "8. Show loaded config\n"
+            "9. Exit"
         )
-        choice = Prompt.ask("Choose", choices=[str(number) for number in range(1, 9)])
+        choice = Prompt.ask("Choose", choices=[str(number) for number in range(1, 10)])
 
         if choice == "1":
             print_snapshot(service.sample(), config)
@@ -302,8 +313,10 @@ def interactive_menu(
         elif choice == "5":
             _show_network(service, True)
         elif choice == "6":
-            _save(service)
+            _run_internet_speedtest()
         elif choice == "7":
+            _save(service)
+        elif choice == "8":
             _print_config(config)
         else:
             return
@@ -371,6 +384,8 @@ def _dispatch(args: argparse.Namespace, config: AppConfig) -> None:
         )
     elif command == "network":
         _show_network(MonitorService(config, include_gpu=False), args.speed)
+    elif command == "speedtest":
+        _run_internet_speedtest()
     elif command == "save":
         _save(MonitorService(config, include_gpu=include_gpu), args.output)
     elif command == "serve":
@@ -402,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     except ExporterError as error:
         console.print(f"[bold red]Prometheus exporter error:[/bold red] {escape(str(error))}")
+        return 1
+    except InternetSpeedTestError as error:
+        console.print(f"[bold red]Internet speed test error:[/bold red] {escape(str(error))}")
         return 1
     except (OSError, psutil.Error) as error:
         console.print(f"[bold red]SystemPulse error:[/bold red] {error}")
