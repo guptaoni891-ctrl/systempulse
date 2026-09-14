@@ -7,6 +7,7 @@ from rich.console import Console
 
 import systempulse.ui as ui
 from systempulse.config import AlertsConfig, AppConfig
+from systempulse.internet_speed import InternetSpeedResult
 from systempulse.models import (
     ActiveAlert,
     AlertEvent,
@@ -535,3 +536,47 @@ def test_persisted_alert_history_renders_events(monkeypatch):
     assert "opened" in rendered
     assert "CPU usage" in rendered
     assert "70.0%" in rendered
+
+
+def test_internet_speedtest_renders_values_and_complete_server(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=100))
+
+    ui.print_internet_speedtest(
+        InternetSpeedResult(
+            download_mbps=812.44,
+            upload_mbps=176.84,
+            ping_ms=7.44,
+            server_name="Dubai",
+            server_sponsor="du",
+            server_country="United Arab Emirates",
+            server_id="123",
+        )
+    )
+    rendered = output.getvalue()
+
+    assert "Internet Speed Test" in rendered
+    assert "Download" in rendered and "812.4 Mbps" in rendered
+    assert "Upload" in rendered and "176.8 Mbps" in rendered
+    assert "Ping" in rendered and "7.4 ms" in rendered
+    assert "du — Dubai, United Arab Emirates" in rendered
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (InternetSpeedResult(0.0, 0.0, 0.0, server_name="Dubai"), "Dubai"),
+        (InternetSpeedResult(0.0, 0.0, 0.0, server_sponsor="du"), "du"),
+        (InternetSpeedResult(0.0, 0.0, 0.0, server_id="123"), "Server 123"),
+        (InternetSpeedResult(0.0, 0.0, 0.0), "Unavailable"),
+    ],
+)
+def test_internet_speedtest_handles_partial_or_missing_server_details(
+    monkeypatch, result, expected
+):
+    output = StringIO()
+    monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=100))
+
+    ui.print_internet_speedtest(result)
+
+    assert expected in output.getvalue()

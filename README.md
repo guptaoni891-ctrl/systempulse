@@ -61,6 +61,7 @@ For virtual-environment setup on each platform, see [Installation from source](#
 
 - CPU, memory, system-disk, and network monitoring.
 - Network totals since boot and upload/download rate calculation.
+- On-demand internet connection benchmarking through `speedtest-cli`.
 - CPU temperature when the operating system exposes a usable sensor through `psutil`.
 - Top CPU-consuming processes.
 - NVIDIA GPU usage, temperature, VRAM, and optional power through `nvidia-smi`.
@@ -178,7 +179,8 @@ Global options must appear before the command:
 | `systempulse snapshot` | Render one authoritative system snapshot. |
 | `systempulse processes --limit 10` | Show processes sorted by sampled CPU usage. |
 | `systempulse network` | Show cumulative sent/received counters since boot. |
-| `systempulse network --speed` | Measure current upload and download rates. |
+| `systempulse network --speed` | Measure current local upload and download throughput. |
+| `systempulse speedtest` | Benchmark internet download, upload, ping, and selected server. |
 | `systempulse --no-gpu snapshot` | Collect a snapshot without running `nvidia-smi`. |
 
 The installed module entry point is equivalent, for example `python -m systempulse snapshot`.

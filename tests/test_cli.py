@@ -61,6 +61,7 @@ def test_build_parser_supports_existing_commands_and_global_options():
     assert history.limit == 5
     assert parser.parse_args(["processes", "--limit", "10"]).limit == 10
     assert parser.parse_args(["network", "--speed"]).speed is True
+    assert parser.parse_args(["speedtest"]).command == "speedtest"
     assert parser.parse_args(["save", "--output", "custom.csv"]).output == "custom.csv"
     serve = parser.parse_args(
         ["serve", "--host", "localhost", "--port", "9200", "--interval", "2.5"]
@@ -101,7 +102,7 @@ def test_interactive_menu_dispatches_each_existing_choice_once(monkeypatch):
     monkeypatch.setattr(
         cli.Prompt,
         "ask",
-        Mock(side_effect=["1", "2", "3", "4", "5", "6", "7", "8"]),
+        Mock(side_effect=["1", "2", "3", "4", "5", "6", "7", "8", "9"]),
     )
     monkeypatch.setattr(cli.console, "print", Mock())
     monkeypatch.setattr(cli, "print_snapshot", Mock())
@@ -109,6 +110,7 @@ def test_interactive_menu_dispatches_each_existing_choice_once(monkeypatch):
     monkeypatch.setattr(cli, "get_top_processes", Mock(return_value=processes))
     monkeypatch.setattr(cli, "print_processes", Mock())
     monkeypatch.setattr(cli, "_show_network", Mock())
+    monkeypatch.setattr(cli, "_run_internet_speedtest", Mock())
     monkeypatch.setattr(cli, "_save", Mock())
     monkeypatch.setattr(cli, "_print_config", Mock())
 
@@ -127,6 +129,7 @@ def test_interactive_menu_dispatches_each_existing_choice_once(monkeypatch):
     cli.get_top_processes.assert_called_once_with(limit=5, sample_interval=1.0)
     cli.print_processes.assert_called_once_with(processes)
     assert cli._show_network.mock_calls == [call(service, False), call(service, True)]
+    cli._run_internet_speedtest.assert_called_once_with()
     cli._save.assert_called_once_with(service)
     cli._print_config.assert_called_once_with(config)
 
@@ -312,6 +315,40 @@ def test_network_dispatches_current_mode(monkeypatch, arguments, speed):
 
     constructor.assert_called_once_with(config, include_gpu=False)
     show_network.assert_called_once_with(service, speed)
+
+
+def test_speedtest_dispatches_provider_once_without_monitor_service(monkeypatch):
+    config, _ = _mock_loaded_config(monkeypatch)
+    constructor = Mock()
+    result = object()
+    provider = Mock(return_value=result)
+    renderer = Mock()
+    monkeypatch.setattr(cli, "MonitorService", constructor)
+    monkeypatch.setattr(cli, "run_internet_speedtest", provider)
+    monkeypatch.setattr(cli, "print_internet_speedtest", renderer)
+
+    assert cli.main(["speedtest"]) == 0
+
+    provider.assert_called_once_with()
+    renderer.assert_called_once_with(result)
+    constructor.assert_not_called()
+
+
+def test_speedtest_provider_error_is_useful_and_nonzero(monkeypatch):
+    _mock_loaded_config(monkeypatch)
+    monkeypatch.setattr(
+        cli,
+        "run_internet_speedtest",
+        Mock(side_effect=cli.InternetSpeedTestError("Unable to complete the test: offline")),
+    )
+    output = Mock()
+    monkeypatch.setattr(cli.console, "print", output)
+
+    assert cli.main(["speedtest"]) == 1
+
+    message = output.call_args.args[0]
+    assert "Internet speed test error" in message
+    assert "Unable to complete the test: offline" in message
 
 
 def test_save_dispatches_with_output_override(monkeypatch):
