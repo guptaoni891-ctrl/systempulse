@@ -9,6 +9,7 @@ from rich.live import Live
 from systempulse.alerts import AlertEngine
 from systempulse.history import HistoryError, HistoryStore
 from systempulse.models import AlertEvent, SystemSnapshot
+from systempulse.power_session import PowerSessionTracker
 from systempulse.service import MonitorService
 from systempulse.ui import build_snapshot_view
 
@@ -27,6 +28,7 @@ def live_monitor(
     sleeper = sleep or time.sleep
     refresh_interval = max(service.config.monitor.refresh_interval, 0.2)
     engine = alert_engine if alert_engine is not None else AlertEngine(service.config.alerts)
+    power_tracker = PowerSessionTracker()
 
     try:
         initial_snapshot = service.sample()
@@ -37,7 +39,12 @@ def live_monitor(
             initial_events,
             history_warning,
         )
-        next_tick = clock() + refresh_interval
+        initial_sampled_monotonic = clock()
+        power_session = power_tracker.observe(
+            initial_snapshot,
+            initial_sampled_monotonic,
+        )
+        next_tick = initial_sampled_monotonic + refresh_interval
         with Live(
             build_snapshot_view(
                 initial_snapshot,
@@ -45,6 +52,7 @@ def live_monitor(
                 show_network_speed=True,
                 active_alerts=engine.active_alerts,
                 history_warning=history_warning,
+                power_session=power_session,
             ),
             refresh_per_second=4,
             screen=True,
@@ -62,6 +70,7 @@ def live_monitor(
                     current_events,
                     history_warning,
                 )
+                power_session = power_tracker.observe(current_snapshot, clock())
                 live.update(
                     build_snapshot_view(
                         current_snapshot,
@@ -69,6 +78,7 @@ def live_monitor(
                         show_network_speed=True,
                         active_alerts=engine.active_alerts,
                         history_warning=history_warning,
+                        power_session=power_session,
                     )
                 )
 

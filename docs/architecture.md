@@ -9,18 +9,21 @@ flowchart LR
     subgraph Collection
         Core[collector.py]
         GPU[gpu.py]
+        Power[power.py]
         Net[network.py]
         Service[MonitorService]
         Core --> Service
         GPU --> Service
+        Power --> Service
         Net --> Service
     end
 
-    Service --> Snapshot[Immutable SystemSnapshot]
+    Service --> Snapshot[Immutable SystemSnapshot + PowerStats]
 
     subgraph Live session
         Snapshot --> Monitor[monitor.py]
         Monitor --> Alerts[AlertEngine]
+        Monitor --> Session[PowerSessionTracker]
         Monitor --> UI[Rich UI]
         Monitor --> History[HistoryStore]
         Alerts --> Events[Alert events]
@@ -28,6 +31,8 @@ flowchart LR
     end
 
     Snapshot --> CSV[CSV logger]
+    Energy[Shared energy.py integration] --> Session
+    Energy --> History
 
     subgraph Exporter process
         Sampler[Monotonic sampling loop] --> Service
@@ -44,8 +49,8 @@ SQLite does not feed Prometheus. Prometheus scrapes do not point back to collect
 ### One authoritative snapshot per cycle
 
 `MonitorService` is the only component that combines core metrics, network-rate state, GPU results,
-diagnostics, and wall-clock time into a complete `SystemSnapshot`. The snapshot is frozen and uses a
-timezone-aware UTC timestamp.
+CPU package power, derived `PowerStats`, diagnostics, and wall-clock time into a complete
+`SystemSnapshot`. The snapshot is frozen and uses a timezone-aware UTC timestamp.
 
 This avoids the inconsistency that occurs when a UI, CSV logger, alert engine, and database each
 poll the machine at slightly different times. Each sink receives the same values for a given cycle.
@@ -53,8 +58,8 @@ poll the machine at slightly different times. Each sink receives the same values
 ### Collection and consumption are separate
 
 Collectors return typed values and lightweight diagnostics. They do not render output, write files,
-evaluate alerts, or know about Prometheus. Conversely, `AlertEngine`, `HistoryStore`, the Rich UI,
-and the CSV logger do not poll hardware.
+evaluate alerts, or know about Prometheus. Conversely, `AlertEngine`, `PowerSessionTracker`,
+`HistoryStore`, the Rich UI, CSV logger, and Prometheus collector do not poll hardware.
 
 ### Scrapes never trigger collection
 
@@ -66,7 +71,7 @@ scrape frequency cannot cause additional `psutil` or `nvidia-smi` calls.
 
 - Timezone-aware UTC timestamps identify snapshots and persisted events.
 - Monotonic clocks calculate network rates, alert duration and cooldown, dashboard target ticks,
-  exporter target ticks, and sample age.
+  exporter target ticks, sample age, and live-session elapsed time.
 
 Monotonic timing avoids negative or stretched intervals when the system wall clock changes.
 
@@ -94,6 +99,19 @@ Queries the optional LibreHardwareMonitor WMI provider for Windows CPU package p
 already-collected NVIDIA GPU readings, and calculates explicitly labelled system and wall-power
 estimates. CPU sensor selection excludes GPU hardware. Collection failures become bounded
 diagnostics, while actual wall power remains reserved for a future external provider.
+
+### `energy.py`
+
+Provides the single incremental trapezoidal integration implementation shared by live-session and
+historical power analytics. Only positive finite time intervals whose endpoints both contain
+finite, non-negative power contribute to energy and observed duration; invalid or missing readings
+break continuity.
+
+### `power_session.py`
+
+Consumes supplied snapshots plus explicit monotonic timestamps to derive current values,
+time-weighted averages, peaks, observed duration, and energy for the live Power Session panel. It
+does not collect hardware data. Estimated-wall and actual-wall series remain independent.
 
 ### `network.py`
 
@@ -125,9 +143,11 @@ identities. Missing active metrics hold their state rather than generating false
 
 ### `history.py`
 
-Owns SQLite initialization, schema version checks, transactional snapshot/GPU/event writes,
-retention, summaries, recent-sample queries, and durable alert-event queries. It accepts already
-collected snapshots and events and has no collector dependencies.
+Owns SQLite initialization and migration, schema version checks, transactional
+snapshot/GPU/power/event writes, retention, summaries, recent-sample queries, power analytics, and
+durable alert-event queries. It accepts already collected snapshots and events and has no collector
+dependencies. Historical energy is calculated only from stored, timestamped power fields through
+the shared energy implementation.
 
 Foreign-key relationships keep child GPU and alert rows associated with one snapshot. Storage
 errors are translated into `HistoryError` with the affected database path and operation.
@@ -138,28 +158,31 @@ Keeps `prometheus-client` behind a runtime optional-import boundary. It defines 
 state, an atomic latest-snapshot view, the custom Prometheus collector, the anchored sampling loop,
 and HTTP server lifecycle.
 
-The registry is dedicated to SystemPulse rather than using the default global registry. Metric
-labels are deliberately bounded; no process names, GPU names, diagnostics, or error text become
-labels.
+The registry is dedicated to SystemPulse rather than using the default global registry. Scrapes
+serialize cached `ExporterState`; aggregate power gauges are emitted independently of GPU-list
+presence. Metric labels are deliberately bounded; no process names, GPU names, diagnostics, or
+error text become labels.
 
 ### `monitor.py`
 
 Runs the live Rich display on anchored monotonic target ticks. Slow collection skips missed ticks
-instead of replaying them. For each cycle it evaluates alerts, attempts one transactional history
-write, and renders the same snapshot and active-alert state.
+instead of replaying them. For each cycle it evaluates alerts, updates `PowerSessionTracker`,
+attempts one transactional history write, and renders values derived from the same snapshot.
 
 History failures disable further persistence for that session while leaving monitoring active.
 
 ### `ui.py`
 
-Builds Rich tables and panels for snapshots, active alerts, history summaries, alert history,
-processes, and warnings. It remains presentation-focused and receives typed data from other modules.
+Builds Rich tables and panels for snapshots, live power sessions, power history, recent power
+samples, active alerts, processes, and warnings. Estimated values are marked with `~`. It remains
+presentation-focused and receives typed data from other modules.
 
 ### `logger.py`
 
-Appends one `SystemSnapshot` to CSV, creates parent directories, and writes a header for a new or
-empty file. For backward-compatible CSV shape, the current format records the first GPU only;
-SQLite and Prometheus represent every GPU independently.
+Appends one `SystemSnapshot` to CSV without recomputing power, creates parent directories, and
+writes the V2 header for a new or empty file. Exact legacy V1 files keep their legacy row width;
+unknown headers are rejected. The established GPU columns record the first GPU only, while SQLite
+and Prometheus represent every GPU independently.
 
 ### `config.py`
 

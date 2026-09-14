@@ -7,7 +7,7 @@ import pytest
 from prometheus_client import CollectorRegistry, generate_latest
 
 import systempulse.exporter as exporter
-from systempulse.models import GPUStats, NetworkSpeed, NetworkStats, SystemSnapshot
+from systempulse.models import GPUStats, NetworkSpeed, NetworkStats, PowerStats, SystemSnapshot
 
 
 def _gpu(index=0, *, power=42.5):
@@ -21,7 +21,7 @@ def _gpu(index=0, *, power=42.5):
     )
 
 
-def _snapshot(*, temperature=61.5, gpus=(), sent=1_000, received=2_000):
+def _snapshot(*, temperature=61.5, gpus=(), sent=1_000, received=2_000, power=None):
     return SystemSnapshot(
         timestamp=datetime(2026, 8, 25, 8, 0, tzinfo=UTC),
         cpu_usage_percent=12.5,
@@ -35,6 +35,7 @@ def _snapshot(*, temperature=61.5, gpus=(), sent=1_000, received=2_000):
         network=NetworkStats(sent, received),
         network_speed=NetworkSpeed(125.0, 250.0),
         gpus=tuple(gpus),
+        power=power or PowerStats(),
     )
 
 
@@ -157,6 +158,80 @@ def test_zero_gpus_omits_gpu_metric_families():
     assert "systempulse_gpu_" not in _text(registry)
 
 
+def test_all_power_gauges_use_snapshot_values_even_without_gpu_inventory():
+    power = PowerStats(
+        cpu_package_watts=42.5,
+        gpu_total_watts=121.8,
+        cpu_gpu_watts=164.3,
+        estimated_system_watts=199.3,
+        estimated_wall_watts=221.44,
+        actual_wall_watts=215.0,
+    )
+    _, registry = _registry(_snapshot(gpus=(), power=power))
+    samples = _samples(registry)
+    text = _text(registry)
+
+    assert samples[("systempulse_cpu_package_power_watts", ())] == 42.5
+    assert samples[("systempulse_gpu_total_power_watts", ())] == 121.8
+    assert samples[("systempulse_cpu_gpu_power_watts", ())] == 164.3
+    assert samples[("systempulse_estimated_system_power_watts", ())] == 199.3
+    assert samples[("systempulse_estimated_wall_power_watts", ())] == 221.44
+    assert samples[("systempulse_actual_wall_power_watts", ())] == 215.0
+    assert (
+        "# HELP systempulse_cpu_package_power_watts "
+        "Current measured CPU package power in watts." in text
+    )
+    assert (
+        "# HELP systempulse_estimated_wall_power_watts "
+        "Current estimated wall power in watts." in text
+    )
+    assert (
+        "# HELP systempulse_actual_wall_power_watts "
+        "Current actual wall power in watts from an external provider." in text
+    )
+
+
+@pytest.mark.parametrize("invalid", [None, -1.0, float("nan"), float("inf"), float("-inf")])
+def test_unavailable_or_invalid_overall_power_values_are_omitted(invalid):
+    power = PowerStats(
+        cpu_package_watts=invalid,
+        gpu_total_watts=invalid,
+        cpu_gpu_watts=invalid,
+        estimated_system_watts=invalid,
+        estimated_wall_watts=invalid,
+        actual_wall_watts=invalid,
+    )
+    _, registry = _registry(_snapshot(power=power))
+
+    text = _text(registry)
+    assert "systempulse_cpu_package_power_watts" not in text
+    assert "systempulse_gpu_total_power_watts" not in text
+    assert "systempulse_cpu_gpu_power_watts" not in text
+    assert "systempulse_estimated_system_power_watts" not in text
+    assert "systempulse_estimated_wall_power_watts" not in text
+    assert "systempulse_actual_wall_power_watts" not in text
+
+
+def test_zero_is_emitted_for_every_overall_power_gauge():
+    power = PowerStats(
+        cpu_package_watts=0.0,
+        gpu_total_watts=0.0,
+        cpu_gpu_watts=0.0,
+        estimated_system_watts=0.0,
+        estimated_wall_watts=0.0,
+        actual_wall_watts=0.0,
+    )
+    _, registry = _registry(_snapshot(power=power))
+    samples = _samples(registry)
+
+    assert samples[("systempulse_cpu_package_power_watts", ())] == 0.0
+    assert samples[("systempulse_gpu_total_power_watts", ())] == 0.0
+    assert samples[("systempulse_cpu_gpu_power_watts", ())] == 0.0
+    assert samples[("systempulse_estimated_system_power_watts", ())] == 0.0
+    assert samples[("systempulse_estimated_wall_power_watts", ())] == 0.0
+    assert samples[("systempulse_actual_wall_power_watts", ())] == 0.0
+
+
 def test_one_gpu_uses_bounded_index_label_and_base_units():
     _, registry = _registry(_snapshot(gpus=(_gpu(),)))
     samples = _samples(registry)
@@ -167,6 +242,19 @@ def test_one_gpu_uses_bounded_index_label_and_base_units():
     assert samples[("systempulse_gpu_memory_used_bytes", label)] == 512 * 1024 * 1024
     assert samples[("systempulse_gpu_memory_total_bytes", label)] == 4096 * 1024 * 1024
     assert samples[("systempulse_gpu_power_watts", label)] == 42.5
+
+
+def test_aggregate_gpu_total_and_per_gpu_power_metrics_coexist():
+    _, registry = _registry(
+        _snapshot(
+            gpus=(_gpu(power=42.5),),
+            power=PowerStats(gpu_total_watts=87.5),
+        )
+    )
+    samples = _samples(registry)
+
+    assert samples[("systempulse_gpu_total_power_watts", ())] == 87.5
+    assert samples[("systempulse_gpu_power_watts", (("gpu", "0"),))] == 42.5
 
 
 def test_multiple_gpus_share_metric_names_with_stable_index_labels():

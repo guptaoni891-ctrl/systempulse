@@ -78,6 +78,12 @@ succeeds.
 | `systempulse_network_bytes_received_total` | Counter | bytes | OS cumulative received counter since its last reset. |
 | `systempulse_network_upload_bytes_per_second` | Gauge | bytes/second | Calculated upload rate. |
 | `systempulse_network_download_bytes_per_second` | Gauge | bytes/second | Calculated download rate. |
+| `systempulse_cpu_package_power_watts` | Gauge | watts | Current measured CPU package power. |
+| `systempulse_gpu_total_power_watts` | Gauge | watts | Current measured total of available GPU power readings. |
+| `systempulse_cpu_gpu_power_watts` | Gauge | watts | Current combined measured CPU package and GPU total. |
+| `systempulse_estimated_system_power_watts` | Gauge | watts | Current estimated system DC power. |
+| `systempulse_estimated_wall_power_watts` | Gauge | watts | Current estimated wall power. |
+| `systempulse_actual_wall_power_watts` | Gauge | watts | Current external-provider wall measurement when available. |
 | `systempulse_gpu_usage_ratio` | Gauge | ratio | GPU usage from 0 to 1, labeled by `gpu`. |
 | `systempulse_gpu_temperature_celsius` | Gauge | °C | GPU temperature, labeled by `gpu`. |
 | `systempulse_gpu_memory_used_bytes` | Gauge | bytes | Used GPU memory, labeled by `gpu`. |
@@ -85,8 +91,16 @@ succeeds.
 | `systempulse_gpu_power_watts` | Gauge | watts | GPU power when reported, labeled by `gpu`. |
 
 Usage values are converted from internal percentages to ratios at the exporter boundary. Optional
-CPU temperature is omitted when unavailable. All GPU series are omitted when no GPU is available,
-and GPU power is omitted for devices that do not report it.
+CPU temperature is omitted when unavailable. Power values that are unavailable, negative, or
+non-finite are omitted, while a legitimate zero-watt reading is emitted. The six snapshot-level
+power gauges are considered independently and are not hidden merely because the snapshot has no GPU
+list. Per-GPU series are omitted when no GPU is available, and per-GPU power is omitted for devices
+that do not report it.
+
+All power metrics are instantaneous gauges. Estimated metrics remain estimates; they are not
+physical wall-meter measurements. SystemPulse does not currently expose cumulative energy as a
+Prometheus counter because durable cumulative semantics across exporter process restarts have not
+yet been defined. Live and SQLite energy analytics do not change that exporter contract.
 
 The only GPU label is a bounded zero-based snapshot index such as `gpu="0"`. GPU names, process
 names, diagnostics, paths, and error messages are not exported as labels.

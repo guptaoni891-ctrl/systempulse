@@ -18,8 +18,20 @@ from systempulse.models import (
     GPUStats,
     NetworkSpeed,
     NetworkStats,
+    PowerHistorySummary,
+    PowerStats,
     SystemSnapshot,
 )
+
+POWER_COLUMNS = {
+    "cpu_package_watts",
+    "gpu_total_watts",
+    "cpu_gpu_watts",
+    "estimated_system_watts",
+    "estimated_wall_watts",
+    "actual_wall_watts",
+    "cpu_power_source",
+}
 
 
 def _gpu(name="Test GPU", usage=25.0, temperature=55.0, power=42.5):
@@ -38,6 +50,7 @@ def _snapshot(
     upload=100.0,
     download=200.0,
     gpus=(),
+    power=None,
 ):
     return SystemSnapshot(
         timestamp=timestamp or datetime(2026, 8, 24, 8, 0, tzinfo=UTC),
@@ -52,6 +65,7 @@ def _snapshot(
         network=NetworkStats(sent, received),
         network_speed=NetworkSpeed(upload, download),
         gpus=tuple(gpus),
+        power=power or PowerStats(),
     )
 
 
@@ -69,9 +83,31 @@ def _event(timestamp=None, *, metric="cpu.usage", transition=AlertTransition.OPE
     )
 
 
+def _record_power_series(store, start, readings):
+    for seconds, estimated_wall_watts, actual_wall_watts in readings:
+        store.record_sample(
+            _snapshot(
+                timestamp=start + timedelta(seconds=seconds),
+                power=PowerStats(
+                    estimated_wall_watts=estimated_wall_watts,
+                    actual_wall_watts=actual_wall_watts,
+                ),
+            )
+        )
+
+
 def _rows(path, sql, parameters=()):
     with closing(sqlite3.connect(path)) as connection:
         return connection.execute(sql, parameters).fetchall()
+
+
+def _create_version_1_database(path):
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        for statement in history_module._SCHEMA_STATEMENTS:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 1")
+        connection.commit()
 
 
 def test_database_and_parent_directories_are_created_with_versioned_schema(tmp_path):
@@ -80,7 +116,7 @@ def test_database_and_parent_directories_are_created_with_versioned_schema(tmp_p
     store = HistoryStore(path)
 
     assert path.is_file()
-    assert store.schema_version() == SCHEMA_VERSION == 1
+    assert store.schema_version() == SCHEMA_VERSION == 2
     tables = {
         row[0]
         for row in _rows(
@@ -103,6 +139,130 @@ def test_database_and_parent_directories_are_created_with_versioned_schema(tmp_p
         "alert_events_timestamp_idx",
         "alert_events_metric_idx",
     } <= indexes
+    snapshot_columns = {
+        row[1]: (row[2], row[3]) for row in _rows(path, "PRAGMA table_info(snapshots)")
+    }
+    assert POWER_COLUMNS <= snapshot_columns.keys()
+    assert {snapshot_columns[name][0] for name in POWER_COLUMNS - {"cpu_power_source"}} == {"REAL"}
+    assert snapshot_columns["cpu_power_source"][0] == "TEXT"
+    assert all(snapshot_columns[name][1] == 0 for name in POWER_COLUMNS)
+
+
+def test_version_1_database_is_migrated_without_rebuilding_or_losing_data(tmp_path):
+    path = tmp_path / "version-1.db"
+    _create_version_1_database(path)
+    timestamp = "2026-08-24T08:00:00+00:00"
+    with closing(sqlite3.connect(path)) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO snapshots (
+                timestamp_utc, cpu_usage_percent, ram_usage_percent, ram_used_bytes,
+                ram_total_bytes, disk_usage_percent, disk_used_bytes, disk_total_bytes,
+                cpu_temperature_celsius, network_bytes_sent, network_bytes_received,
+                upload_bytes_per_second, download_bytes_per_second
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timestamp,
+                12.5,
+                50.0,
+                4_000,
+                8_000,
+                40.0,
+                40_000,
+                100_000,
+                None,
+                1_000,
+                2_000,
+                100.0,
+                200.0,
+            ),
+        )
+        snapshot_id = cursor.lastrowid
+        connection.execute(
+            """
+            INSERT INTO gpu_samples (
+                snapshot_id, gpu_index, name, usage_percent, temperature_celsius,
+                vram_used_mib, vram_total_mib, power_watts
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (snapshot_id, 0, "Existing GPU", 25.0, 55.0, 512.0, 4_096.0, 88.5),
+        )
+        connection.execute(
+            """
+            INSERT INTO alert_events (
+                snapshot_id, timestamp_utc, metric, label, severity, transition,
+                current_value, threshold, unit, message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                timestamp,
+                "cpu.usage",
+                "CPU usage",
+                "warning",
+                "opened",
+                70.0,
+                60.0,
+                "%",
+                "Existing alert",
+            ),
+        )
+        connection.commit()
+
+    indexes_before = _rows(
+        path,
+        "SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name",
+    )
+
+    store = HistoryStore(path)
+
+    assert store.schema_version() == 2
+    assert _rows(
+        path,
+        "SELECT timestamp_utc, cpu_usage_percent, cpu_temperature_celsius FROM snapshots",
+    ) == [(timestamp, 12.5, None)]
+    assert _rows(path, "SELECT name, power_watts FROM gpu_samples") == [("Existing GPU", 88.5)]
+    assert _rows(path, "SELECT metric, message FROM alert_events") == [
+        ("cpu.usage", "Existing alert")
+    ]
+    assert (
+        _rows(
+            path,
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index' ORDER BY name",
+        )
+        == indexes_before
+    )
+    power_values = _rows(
+        path,
+        """
+        SELECT cpu_package_watts, gpu_total_watts, cpu_gpu_watts,
+               estimated_system_watts, estimated_wall_watts, actual_wall_watts,
+               cpu_power_source
+        FROM snapshots
+        """,
+    )[0]
+    assert power_values == (None, None, None, None, None, None, None)
+
+
+def test_failed_version_2_migration_rolls_back(monkeypatch, tmp_path):
+    path = tmp_path / "failed-version-2.db"
+    _create_version_1_database(path)
+    monkeypatch.setattr(
+        history_module,
+        "_VERSION_2_MIGRATION_STATEMENTS",
+        (
+            "ALTER TABLE snapshots ADD COLUMN cpu_package_watts REAL",
+            "INVALID SQL",
+        ),
+    )
+
+    with pytest.raises(HistoryError, match="initialize history database"):
+        HistoryStore(path)
+
+    assert {row[1] for row in _rows(path, "PRAGMA table_info(snapshots)")} & POWER_COLUMNS == set()
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
 
 
 def test_future_schema_version_is_rejected(tmp_path):
@@ -115,14 +275,30 @@ def test_future_schema_version_is_rejected(tmp_path):
         HistoryStore(path)
 
 
-def test_incomplete_current_schema_is_rejected(tmp_path):
+def test_incomplete_current_schema_tables_are_rejected(tmp_path):
     path = tmp_path / "incomplete.db"
     with closing(sqlite3.connect(path)) as connection:
         connection.execute("CREATE TABLE snapshots (id INTEGER PRIMARY KEY)")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
 
-    with pytest.raises(HistoryError, match="incomplete version 1 schema"):
+    with pytest.raises(HistoryError, match="incomplete version 2 schema"):
+        HistoryStore(path)
+
+
+def test_incomplete_version_2_snapshot_columns_are_rejected(tmp_path):
+    path = tmp_path / "incomplete-columns.db"
+    _create_version_1_database(path)
+    with closing(sqlite3.connect(path)) as connection:
+        for statement in history_module._VERSION_2_MIGRATION_STATEMENTS[:-1]:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 2")
+        connection.commit()
+
+    with pytest.raises(
+        HistoryError,
+        match=r"incomplete version 2 schema.*cpu_power_source",
+    ):
         HistoryStore(path)
 
 
@@ -164,6 +340,55 @@ def test_snapshot_insertion_preserves_numeric_fields_and_null_temperature(tmp_pa
     assert row[2] == pytest.approx(12.3456789)
     assert row[3] is None
     assert row[4] == pytest.approx(123.456789)
+
+
+def test_power_values_and_cpu_source_round_trip_through_recent_samples(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    power = PowerStats(
+        cpu_package_watts=42.5,
+        gpu_total_watts=121.8,
+        cpu_gpu_watts=164.3,
+        estimated_system_watts=199.3,
+        estimated_wall_watts=221.44,
+        actual_wall_watts=None,
+        cpu_source="LibreHardwareMonitor",
+    )
+
+    store.record_sample(_snapshot(power=power))
+
+    sample = store.recent_samples(limit=1)[0]
+    assert sample.cpu_package_watts == pytest.approx(42.5)
+    assert sample.gpu_total_watts == pytest.approx(121.8)
+    assert sample.cpu_gpu_watts == pytest.approx(164.3)
+    assert sample.estimated_system_watts == pytest.approx(199.3)
+    assert sample.estimated_wall_watts == pytest.approx(221.44)
+    assert sample.actual_wall_watts is None
+    assert sample.cpu_power_source == "LibreHardwareMonitor"
+
+
+def test_unavailable_power_values_remain_null(tmp_path):
+    path = tmp_path / "history.db"
+    store = HistoryStore(path)
+
+    store.record_sample(_snapshot(power=PowerStats()))
+
+    sample = store.recent_samples(limit=1)[0]
+    assert sample.cpu_package_watts is None
+    assert sample.gpu_total_watts is None
+    assert sample.cpu_gpu_watts is None
+    assert sample.estimated_system_watts is None
+    assert sample.estimated_wall_watts is None
+    assert sample.actual_wall_watts is None
+    assert sample.cpu_power_source is None
+    assert _rows(
+        path,
+        """
+        SELECT cpu_package_watts, gpu_total_watts, cpu_gpu_watts,
+               estimated_system_watts, estimated_wall_watts, actual_wall_watts,
+               cpu_power_source
+        FROM snapshots
+        """,
+    ) == [(None, None, None, None, None, None, None)]
 
 
 def test_zero_gpus_creates_no_gpu_rows(tmp_path):
@@ -291,6 +516,233 @@ def test_summary_aggregates_metrics_temperatures_alerts_and_counter_change(tmp_p
     assert summary.alert_event_count == 1
 
 
+def test_single_power_sample_has_peak_but_no_average_or_energy(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    store.record_sample(_snapshot(power=PowerStats(estimated_wall_watts=100.0)))
+
+    power = store.query_summary().power
+
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.average_estimated_wall_watts is None
+    assert power.estimated_wall_energy_wh == 0.0
+    assert power.estimated_wall_observed_duration_seconds == 0.0
+
+
+def test_constant_historical_power_produces_time_weighted_average_and_energy(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        ((0, 100.0, None), (3600, 100.0, None)),
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts == 100.0
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.estimated_wall_energy_wh == 100.0
+    assert power.estimated_wall_observed_duration_seconds == 3600.0
+
+
+def test_historical_power_uses_trapezoidal_integration(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        ((0, 100.0, None), (3600, 200.0, None)),
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts == 150.0
+    assert power.peak_estimated_wall_watts == 200.0
+    assert power.estimated_wall_energy_wh == 150.0
+    assert power.estimated_wall_observed_duration_seconds == 3600.0
+
+
+def test_irregular_history_average_is_weighted_by_observed_time(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        ((0, 100.0, None), (1800, 200.0, None), (5400, 50.0, None)),
+    )
+
+    power = store.query_summary().power
+
+    assert power.estimated_wall_energy_wh == 200.0
+    assert power.estimated_wall_observed_duration_seconds == 5400.0
+    assert power.average_estimated_wall_watts == pytest.approx(200.0 * 3600.0 / 5400.0)
+    assert power.average_estimated_wall_watts != pytest.approx((100.0 + 200.0 + 50.0) / 3.0)
+
+
+def test_historical_power_gap_is_not_bridged(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        ((0, 100.0, None), (1800, None, None), (3600, 100.0, None)),
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts is None
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.estimated_wall_energy_wh == 0.0
+    assert power.estimated_wall_observed_duration_seconds == 0.0
+
+
+def test_historical_power_integration_resumes_after_gap(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        (
+            (0, 100.0, None),
+            (1800, None, None),
+            (3600, 100.0, None),
+            (7200, 100.0, None),
+        ),
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts == 100.0
+    assert power.estimated_wall_energy_wh == 100.0
+    assert power.estimated_wall_observed_duration_seconds == 3600.0
+
+
+def test_estimated_and_actual_wall_history_are_independent(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        (
+            (0, 100.0, None),
+            (3600, 100.0, 50.0),
+            (7200, 100.0, 150.0),
+        ),
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts == 100.0
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.estimated_wall_energy_wh == 200.0
+    assert power.estimated_wall_observed_duration_seconds == 7200.0
+    assert power.average_actual_wall_watts == 100.0
+    assert power.peak_actual_wall_watts == 150.0
+    assert power.actual_wall_energy_wh == 100.0
+    assert power.actual_wall_observed_duration_seconds == 3600.0
+
+
+def test_all_six_power_metrics_have_weighted_averages_and_peaks(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    store.record_sample(
+        _snapshot(
+            timestamp=start,
+            power=PowerStats(
+                cpu_package_watts=10.0,
+                gpu_total_watts=20.0,
+                cpu_gpu_watts=30.0,
+                estimated_system_watts=40.0,
+                estimated_wall_watts=50.0,
+                actual_wall_watts=60.0,
+            ),
+        )
+    )
+    store.record_sample(
+        _snapshot(
+            timestamp=start + timedelta(hours=1),
+            power=PowerStats(
+                cpu_package_watts=20.0,
+                gpu_total_watts=40.0,
+                cpu_gpu_watts=60.0,
+                estimated_system_watts=80.0,
+                estimated_wall_watts=100.0,
+                actual_wall_watts=120.0,
+            ),
+        )
+    )
+
+    power = store.query_summary().power
+
+    assert power.average_cpu_package_watts == 15.0
+    assert power.peak_cpu_package_watts == 20.0
+    assert power.average_gpu_total_watts == 30.0
+    assert power.peak_gpu_total_watts == 40.0
+    assert power.average_cpu_gpu_watts == 45.0
+    assert power.peak_cpu_gpu_watts == 60.0
+    assert power.average_estimated_system_watts == 60.0
+    assert power.peak_estimated_system_watts == 80.0
+    assert power.average_estimated_wall_watts == 75.0
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.average_actual_wall_watts == 90.0
+    assert power.peak_actual_wall_watts == 120.0
+
+
+def test_invalid_power_is_excluded_from_peaks_and_breaks_continuity(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        (
+            (0, 100.0, 100.0),
+            (3600, -50.0, float("inf")),
+            (7200, 100.0, 100.0),
+            (10800, 100.0, 100.0),
+        ),
+    )
+
+    power = store.query_summary().power
+
+    assert power.peak_estimated_wall_watts == 100.0
+    assert power.estimated_wall_energy_wh == 100.0
+    assert power.estimated_wall_observed_duration_seconds == 3600.0
+    assert power.peak_actual_wall_watts == 100.0
+    assert power.actual_wall_energy_wh == 100.0
+    assert power.actual_wall_observed_duration_seconds == 3600.0
+
+
+def test_zero_watts_is_valid_observed_power(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(store, start, ((0, 0.0, None), (3600, 0.0, None)))
+
+    power = store.query_summary().power
+
+    assert power.average_estimated_wall_watts == 0.0
+    assert power.peak_estimated_wall_watts == 0.0
+    assert power.estimated_wall_energy_wh == 0.0
+    assert power.estimated_wall_observed_duration_seconds == 3600.0
+
+
+def test_power_summary_since_filter_excludes_old_samples_and_crossing_interval(tmp_path):
+    store = HistoryStore(tmp_path / "history.db")
+    start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
+    _record_power_series(
+        store,
+        start,
+        ((0, 500.0, None), (3600, 100.0, None), (7200, 200.0, None)),
+    )
+
+    summary = store.query_summary(since=start + timedelta(hours=1))
+
+    assert summary.period_start == start + timedelta(hours=1)
+    assert summary.power.average_estimated_wall_watts == 150.0
+    assert summary.power.peak_estimated_wall_watts == 200.0
+    assert summary.power.estimated_wall_energy_wh == 150.0
+    assert summary.power.estimated_wall_observed_duration_seconds == 3600.0
+
+
 def test_summary_since_filter_excludes_older_samples_and_events(tmp_path):
     store = HistoryStore(tmp_path / "history.db")
     start = datetime(2026, 8, 24, 8, 0, tzinfo=UTC)
@@ -313,6 +765,7 @@ def test_empty_summary_uses_none_instead_of_fake_values(tmp_path):
     assert summary.average_cpu_percent is None
     assert summary.peak_gpu_temperature_celsius is None
     assert summary.observed_network_sent_change_bytes is None
+    assert summary.power == PowerHistorySummary()
 
 
 def test_counter_reset_is_not_reported_as_negative_transfer(tmp_path):

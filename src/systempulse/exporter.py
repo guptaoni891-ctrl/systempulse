@@ -6,12 +6,45 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeGuard
 
 from systempulse.models import SystemSnapshot
 from systempulse.service import MonitorService
 
 LOGGER = logging.getLogger(__name__)
+
+_POWER_GAUGES = (
+    (
+        "cpu_package_watts",
+        "systempulse_cpu_package_power_watts",
+        "Current measured CPU package power in watts.",
+    ),
+    (
+        "gpu_total_watts",
+        "systempulse_gpu_total_power_watts",
+        "Current measured total GPU power in watts.",
+    ),
+    (
+        "cpu_gpu_watts",
+        "systempulse_cpu_gpu_power_watts",
+        "Current combined measured CPU and GPU power in watts.",
+    ),
+    (
+        "estimated_system_watts",
+        "systempulse_estimated_system_power_watts",
+        "Current estimated system power in watts.",
+    ),
+    (
+        "estimated_wall_watts",
+        "systempulse_estimated_wall_power_watts",
+        "Current estimated wall power in watts.",
+    ),
+    (
+        "actual_wall_watts",
+        "systempulse_actual_wall_power_watts",
+        "Current actual wall power in watts from an external provider.",
+    ),
+)
 
 
 class ExporterError(RuntimeError):
@@ -198,6 +231,11 @@ class SystemPulseCollector:
             snapshot.network_speed.download_bytes_per_second,
         )
 
+        for attribute, name, help_text in _POWER_GAUGES:
+            value = getattr(snapshot.power, attribute)
+            if _valid_power(value):
+                yield _gauge(GaugeMetricFamily, name, help_text, value)
+
         if not snapshot.gpus:
             return
 
@@ -236,6 +274,10 @@ def _gauge(metric_family: Any, name: str, help_text: str, value: float) -> Any:
     metric = metric_family(name, help_text)
     metric.add_metric([], value)
     return metric
+
+
+def _valid_power(value: float | None) -> TypeGuard[float]:
+    return value is not None and math.isfinite(value) and value >= 0.0
 
 
 def create_registry(

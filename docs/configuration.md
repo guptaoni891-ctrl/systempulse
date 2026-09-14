@@ -105,8 +105,35 @@ option overrides `logging.csv_path` for one invocation.
 | `power.other_components_watts` | number ≥ 0 | `35.0` | Estimated DC power for components outside the CPU and NVIDIA GPUs. |
 | `power.psu_efficiency` | number > 0 and ≤ 1 | `0.90` | Efficiency used only to estimate wall power. |
 
-On Windows, CPU package power is read from the optional LibreHardwareMonitor WMI provider. System
-and wall values are estimates; SystemPulse does not report either as an actual wall measurement.
+On Windows, CPU package power is read from the optional LibreHardwareMonitor WMI provider.
+LibreHardwareMonitor must be running with enough access to expose the
+`root\LibreHardwareMonitor` namespace and a recognized CPU package sensor. If it is unavailable,
+SystemPulse reports CPU power as unavailable without stopping core monitoring; independently
+collected NVIDIA GPU telemetry continues when `nvidia-smi` works. CPU package power collection is
+currently unavailable on macOS and Linux.
+
+`power.other_components_watts` is an estimated DC allowance for components not included in the
+measured CPU + GPU total, such as memory, storage, fans, and motherboard components.
+`power.psu_efficiency` converts that estimated system power to an estimated wall draw:
+
+```text
+estimated_system_watts = cpu_gpu_watts + other_components_watts
+estimated_wall_watts = estimated_system_watts / psu_efficiency
+```
+
+Both derived values require CPU + GPU power, which in turn requires both CPU package and aggregate
+GPU telemetry. Missing inputs remain unavailable rather than becoming zero. Estimated system and
+wall values are displayed with `~` and must not be interpreted as physical wall-meter readings.
+`actual_wall_watts` is reserved for an external provider and remains unavailable because no such
+provider is implemented.
+
+For example:
+
+```bash
+systempulse config set power.other_components_watts 45
+systempulse config set power.psu_efficiency 0.92
+systempulse config set power.enabled true
+```
 
 ### Alerts
 
