@@ -118,6 +118,16 @@ does not collect hardware data. Estimated-wall and actual-wall series remain ind
 Wraps cumulative OS network counters and calculates non-negative rates from two observations and a
 positive elapsed interval. Counter resets are clamped to zero for instantaneous rate calculation.
 
+### `internet_speed.py`
+
+Runs the separately invoked active internet benchmark through an injected, persistent HTTPX client
+with HTTP/2 enabled and ordinary environment-proxy support retained. It uses Cloudflare edge
+download and upload endpoints, header-arrival latency timing, progressively larger measurement
+sets, median latency, consecutive-sample jitter, and P90 from the final stable bandwidth set. HTTP
+version metadata is retained when available, but HTTP/1.1 fallback remains valid. It does not
+collect or infer geographic location, submit results to analytics endpoints, persist results, or
+alter the local interface-rate behavior in `network.py`.
+
 ### `service.py`
 
 `MonitorService` orchestrates collectors and creates authoritative snapshots. Its only retained
@@ -208,6 +218,7 @@ not contain collector logic.
 - Configuration errors fail before monitoring with exit code 2.
 - Direct history errors use exit code 3; live history failures degrade to a visible warning.
 - Exporter and system-operation errors use exit code 1.
+- Internet speed-test HTTP and validation failures use exit code 1 without affecting other commands.
 - A top-level keyboard interrupt returns 130, while the live monitor handles interruption cleanly.
 
 These boundaries keep unavailable optional telemetry separate from invalid configuration or failed

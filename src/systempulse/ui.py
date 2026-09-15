@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from typing import Protocol
 
 from rich.console import Console, Group, RenderableType
 from rich.panel import Panel
@@ -9,7 +10,6 @@ from rich.table import Table
 from rich.text import Text
 
 from systempulse.config import AppConfig
-from systempulse.internet_speed import InternetSpeedResult
 from systempulse.models import (
     ActiveAlert,
     AlertEvent,
@@ -23,6 +23,16 @@ from systempulse.models import (
 )
 from systempulse.status import classify, classify_temperature
 from systempulse.utils import format_bytes, format_rate
+
+
+class _InternetSpeedView(Protocol):
+    download_mbps: float
+    upload_mbps: float
+    latency_ms: float
+    jitter_ms: float | None
+    provider: str
+    edge_colo: str | None
+
 
 console = Console()
 
@@ -317,30 +327,20 @@ def print_processes(processes: list[ProcessStats]) -> None:
     console.print(table)
 
 
-def print_internet_speedtest(result: InternetSpeedResult) -> None:
+def print_internet_speedtest(result: _InternetSpeedView) -> None:
     table = Table(title="Internet Speed Test", show_header=False, expand=False)
     table.add_column("Metric", style="bold")
     table.add_column("Value", justify="right")
     table.add_row("Download", f"{result.download_mbps:.1f} Mbps")
     table.add_row("Upload", f"{result.upload_mbps:.1f} Mbps")
-    table.add_row("Ping", f"{result.ping_ms:.1f} ms")
-    table.add_row("Server", Text(_internet_speed_server(result)))
-    console.print(table)
-
-
-def _internet_speed_server(result: InternetSpeedResult) -> str:
-    location = ", ".join(
-        value for value in (result.server_name, result.server_country) if value is not None
+    table.add_row("Latency", f"{result.latency_ms:.1f} ms")
+    table.add_row(
+        "Jitter",
+        "Unavailable" if result.jitter_ms is None else f"{result.jitter_ms:.1f} ms",
     )
-    if result.server_sponsor and location:
-        return f"{result.server_sponsor} — {location}"
-    if result.server_sponsor:
-        return result.server_sponsor
-    if location:
-        return location
-    if result.server_id:
-        return f"Server {result.server_id}"
-    return "Unavailable"
+    table.add_row("Provider", Text(result.provider))
+    table.add_row("Edge", Text(result.edge_colo or "Unavailable"))
+    console.print(table)
 
 
 def print_history(

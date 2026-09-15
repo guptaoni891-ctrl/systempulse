@@ -1,3 +1,5 @@
+import ast
+import inspect
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -324,7 +326,7 @@ def test_speedtest_dispatches_provider_once_without_monitor_service(monkeypatch)
     provider = Mock(return_value=result)
     renderer = Mock()
     monkeypatch.setattr(cli, "MonitorService", constructor)
-    monkeypatch.setattr(cli, "run_internet_speedtest", provider)
+    monkeypatch.setattr(cli, "_execute_internet_speedtest", provider)
     monkeypatch.setattr(cli, "print_internet_speedtest", renderer)
 
     assert cli.main(["speedtest"]) == 0
@@ -334,12 +336,27 @@ def test_speedtest_dispatches_provider_once_without_monitor_service(monkeypatch)
     constructor.assert_not_called()
 
 
+def test_internet_speed_provider_import_is_scoped_to_speedtest_execution():
+    module = ast.parse(inspect.getsource(cli))
+    top_level_imports = [
+        node for node in module.body if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+
+    assert all(
+        not isinstance(node, ast.ImportFrom) or node.module != "systempulse.internet_speed"
+        for node in top_level_imports
+    )
+    assert "from systempulse.internet_speed import" in inspect.getsource(
+        cli._execute_internet_speedtest
+    )
+
+
 def test_speedtest_provider_error_is_useful_and_nonzero(monkeypatch):
     _mock_loaded_config(monkeypatch)
     monkeypatch.setattr(
         cli,
-        "run_internet_speedtest",
-        Mock(side_effect=cli.InternetSpeedTestError("Unable to complete the test: offline")),
+        "_run_internet_speedtest",
+        Mock(side_effect=cli.InternetSpeedCommandError("Unable to complete the test: offline")),
     )
     output = Mock()
     monkeypatch.setattr(cli.console, "print", output)

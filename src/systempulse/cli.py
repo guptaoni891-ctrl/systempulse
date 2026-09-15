@@ -5,6 +5,7 @@ import json
 import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import psutil
 from rich.markup import escape
@@ -21,7 +22,6 @@ from systempulse.config import (
 )
 from systempulse.exporter import ExporterError, serve_exporter
 from systempulse.history import HistoryError, HistoryStore
-from systempulse.internet_speed import InternetSpeedTestError, run_internet_speedtest
 from systempulse.logger import save_snapshot
 from systempulse.monitor import live_monitor
 from systempulse.paths import resolve_config_path, user_config_path
@@ -36,6 +36,10 @@ from systempulse.ui import (
     print_snapshot,
 )
 from systempulse.utils import format_bytes, format_rate
+
+
+class InternetSpeedCommandError(RuntimeError):
+    """Present a provider failure without importing it for unrelated commands."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,7 +110,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Measure current local upload and download throughput.",
     )
-    subparsers.add_parser("speedtest", help="Run an internet connection speed test.")
+    subparsers.add_parser(
+        "speedtest",
+        help="Run an active internet speed test against Cloudflare's edge.",
+        description=(
+            "Actively transfer data through Cloudflare's edge to measure internet download, "
+            "upload, latency, and jitter. This test can consume significant bandwidth."
+        ),
+    )
 
     save_parser = subparsers.add_parser("save", help="Save a system snapshot to CSV.")
     save_parser.add_argument("--output", help="Override the configured CSV path.")
@@ -171,8 +182,18 @@ def _save(service: MonitorService, output: str | None = None) -> None:
     console.print(f"Saved reading to [bold]{path.resolve()}[/bold]")
 
 
+def _execute_internet_speedtest() -> Any:
+    from systempulse.internet_speed import InternetSpeedTestError, run_internet_speedtest
+
+    try:
+        return run_internet_speedtest()
+    except InternetSpeedTestError as error:
+        raise InternetSpeedCommandError(str(error)) from error
+
+
 def _run_internet_speedtest() -> None:
-    print_internet_speedtest(run_internet_speedtest())
+    result = _execute_internet_speedtest()
+    print_internet_speedtest(result)
 
 
 def _print_config(config: AppConfig) -> None:
@@ -418,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     except ExporterError as error:
         console.print(f"[bold red]Prometheus exporter error:[/bold red] {escape(str(error))}")
         return 1
-    except InternetSpeedTestError as error:
+    except InternetSpeedCommandError as error:
         console.print(f"[bold red]Internet speed test error:[/bold red] {escape(str(error))}")
         return 1
     except (OSError, psutil.Error) as error:

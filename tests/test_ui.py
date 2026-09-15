@@ -538,7 +538,7 @@ def test_persisted_alert_history_renders_events(monkeypatch):
     assert "70.0%" in rendered
 
 
-def test_internet_speedtest_renders_values_and_complete_server(monkeypatch):
+def test_internet_speedtest_renders_cloudflare_values_and_edge(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=100))
 
@@ -546,11 +546,10 @@ def test_internet_speedtest_renders_values_and_complete_server(monkeypatch):
         InternetSpeedResult(
             download_mbps=812.44,
             upload_mbps=176.84,
-            ping_ms=7.44,
-            server_name="Dubai",
-            server_sponsor="du",
-            server_country="United Arab Emirates",
-            server_id="123",
+            latency_ms=7.44,
+            jitter_ms=1.84,
+            provider="Cloudflare",
+            edge_colo="DXB",
         )
     )
     rendered = output.getvalue()
@@ -558,22 +557,21 @@ def test_internet_speedtest_renders_values_and_complete_server(monkeypatch):
     assert "Internet Speed Test" in rendered
     assert "Download" in rendered and "812.4 Mbps" in rendered
     assert "Upload" in rendered and "176.8 Mbps" in rendered
-    assert "Ping" in rendered and "7.4 ms" in rendered
-    assert "du — Dubai, United Arab Emirates" in rendered
+    assert "Latency" in rendered and "7.4 ms" in rendered
+    assert "Jitter" in rendered and "1.8 ms" in rendered
+    assert "Provider" in rendered and "Cloudflare" in rendered
+    assert "Edge" in rendered and "DXB" in rendered
+    assert "Dubai" not in rendered
 
 
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
-        (InternetSpeedResult(0.0, 0.0, 0.0, server_name="Dubai"), "Dubai"),
-        (InternetSpeedResult(0.0, 0.0, 0.0, server_sponsor="du"), "du"),
-        (InternetSpeedResult(0.0, 0.0, 0.0, server_id="123"), "Server 123"),
-        (InternetSpeedResult(0.0, 0.0, 0.0), "Unavailable"),
+        (InternetSpeedResult(0.0, 0.0, 0.0, None, edge_colo="LHR"), "LHR"),
+        (InternetSpeedResult(0.0, 0.0, 0.0, None), "Unavailable"),
     ],
 )
-def test_internet_speedtest_handles_partial_or_missing_server_details(
-    monkeypatch, result, expected
-):
+def test_internet_speedtest_handles_optional_edge_and_jitter(monkeypatch, result, expected):
     output = StringIO()
     monkeypatch.setattr(ui, "console", Console(file=output, force_terminal=False, width=100))
 

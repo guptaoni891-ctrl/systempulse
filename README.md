@@ -54,14 +54,14 @@ pip install systempulse
 pip install "systempulse[prometheus]"  # only when exporter support is needed
 ```
 
-These PyPI commands are release instructions, not a claim that version 2.0 is currently published.
+These PyPI commands are release instructions, not a claim that version 2.1.0 is currently published.
 For virtual-environment setup on each platform, see [Installation from source](#installation-from-source).
 
 ## Features
 
 - CPU, memory, system-disk, and network monitoring.
 - Network totals since boot and upload/download rate calculation.
-- On-demand internet connection benchmarking through `speedtest-cli`.
+- On-demand internet connection benchmarking through Cloudflare's globally routed edge.
 - CPU temperature when the operating system exposes a usable sensor through `psutil`.
 - Top CPU-consuming processes.
 - NVIDIA GPU usage, temperature, VRAM, and optional power through `nvidia-smi`.
@@ -179,11 +179,31 @@ Global options must appear before the command:
 | `systempulse snapshot` | Render one authoritative system snapshot. |
 | `systempulse processes --limit 10` | Show processes sorted by sampled CPU usage. |
 | `systempulse network` | Show cumulative sent/received counters since boot. |
-| `systempulse network --speed` | Measure current local upload and download throughput. |
-| `systempulse speedtest` | Benchmark internet download, upload, ping, and selected server. |
+| `systempulse network --speed` | Measure current local interface upload and download throughput. |
+| `systempulse speedtest` | Actively benchmark internet download, upload, HTTP latency, and jitter through Cloudflare's edge. |
 | `systempulse --no-gpu snapshot` | Collect a snapshot without running `nvidia-smi`. |
 
 The installed module entry point is equivalent, for example `python -m systempulse snapshot`.
+
+### Internet speed test
+
+`systempulse network --speed` and `systempulse speedtest` measure different things. The former
+samples operating-system interface counters to report current local throughput; it does not create
+benchmark traffic. The latter is an explicit, active internet benchmark that downloads and uploads
+progressively larger payloads through Cloudflare's edge infrastructure.
+
+The benchmark uses a native Python HTTP/2 client and a Cloudflare-inspired progressive measurement
+methodology. Results may differ from Cloudflare's browser test, which uses the browser
+PerformanceResourceTiming API; SystemPulse does not claim numerical equivalence.
+Latency is measured with HTTPS requests to the Cloudflare edge at the application layer. It is not
+ICMP ping, and protocol and timing-API differences can make it differ from the browser result.
+
+Because `systempulse speedtest` transfers test data, it may consume significant bandwidth. It runs
+only when invoked directly (or selected from the interactive menu), never as part of snapshot,
+live, history, save, serve, config, processes, or ordinary network monitoring. Results are not
+stored in SQLite history or CSV. SystemPulse displays Cloudflare's edge colo code when response
+metadata provides one, but it does not infer or display the user's country, city, or other
+geographic location. See [docs/network.md](docs/network.md).
 
 ### Alerts and history
 
@@ -302,6 +322,7 @@ both normal exporter behavior and missing-dependency behavior. Runtime users can
 - [Configuration](docs/configuration.md)
 - [Alerts](docs/alerts.md)
 - [SQLite history](docs/history.md)
+- [Network and internet speed](docs/network.md)
 - [Prometheus exporter](docs/prometheus.md)
 - [Architecture](docs/architecture.md)
 - [Development and CI](docs/development.md)

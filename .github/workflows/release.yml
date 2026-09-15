@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Git tag to publish"
+        description: "Existing Git tag to publish (for example, v2.1.0)"
         required: true
-        default: "v2.0.0"
         type: string
 
 permissions:
@@ -21,11 +20,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
     steps:
-      - name: Check out release
+      - name: Resolve and validate release tag
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9] ]]; then
+            echo "Release tag must start with v and a version number: $RELEASE_TAG"
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check out selected release tag
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+          ref: ${{ steps.release.outputs.tag }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -37,23 +51,72 @@ jobs:
       - name: Install build tools
         run: python -m pip install "build>=1.2,<2" "twine>=6.2,<8"
 
-      - name: Build wheel and sdist
+      - name: Match tag to package version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          python - <<'PY'
+          import os
+          import pathlib
+          import runpy
+
+          from packaging.version import InvalidVersion, Version
+
+          tag = os.environ["RELEASE_TAG"]
+          tag_version = tag[1:]
+          try:
+              Version(tag_version)
+          except InvalidVersion as error:
+              raise SystemExit(f"Invalid release version in tag {tag!r}: {error}") from error
+
+          package_version = runpy.run_path("src/systempulse/__init__.py")["__version__"]
+          if package_version != tag_version:
+              raise SystemExit(
+                  f"Tag {tag!r} does not match package version {package_version!r}."
+              )
+
+          with pathlib.Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"version={package_version}\n")
+          print(f"Release version: {package_version}")
+          PY
+
+      - name: Build wheel and source distribution
         run: python -m build
 
       - name: Validate distributions
         run: python -m twine check dist/*
 
-      - name: Show package version
+      - name: Verify built artifact versions
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
         run: |
           python - <<'PY'
+          import os
           import pathlib
-          import zipfile
 
-          wheels = list(pathlib.Path("dist").glob("*.whl"))
-          if len(wheels) != 1:
-              raise SystemExit(f"Expected exactly one wheel, found {len(wheels)}")
+          from packaging.utils import parse_sdist_filename, parse_wheel_filename
+          from packaging.version import Version
 
-          print(f"Built: {wheels[0]}")
+          dist = pathlib.Path("dist")
+          wheels = list(dist.glob("*.whl"))
+          sdists = list(dist.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(
+                  f"Expected one wheel and one sdist, found {len(wheels)} and {len(sdists)}."
+              )
+
+          expected = Version(os.environ["EXPECTED_VERSION"])
+          wheel_version = parse_wheel_filename(wheels[0].name)[1]
+          sdist_version = parse_sdist_filename(sdists[0].name)[1]
+          if wheel_version != expected or sdist_version != expected:
+              raise SystemExit(
+                  f"Artifact versions {wheel_version} and {sdist_version} do not match {expected}."
+              )
+          print(f"Built: {wheels[0].name}")
+          print(f"Built: {sdists[0].name}")
           PY
 
       - name: Upload distributions
@@ -78,20 +141,22 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download distributions
+      - name: Download built distributions
         uses: actions/download-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
 
-      - name: Publish to TestPyPI
+      - name: Publish to TestPyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
 
   verify-testpypi:
-    name: Verify TestPyPI package
-    needs: publish-testpypi
+    name: Verify exact TestPyPI package
+    needs:
+      - build
+      - publish-testpypi
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -101,19 +166,30 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Wait for TestPyPI and install
+      - name: Download original built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Wait for exact version on TestPyPI
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
         run: |
+          mkdir testpypi-download
           for attempt in {1..12}; do
-            if python -m pip install \
+            if python -m pip download \
+              --no-deps \
+              --only-binary=:all: \
               --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
-              "systempulse==2.0.0"; then
+              --dest testpypi-download \
+              "systempulse==$PACKAGE_VERSION"; then
               break
             fi
 
             if [ "$attempt" -eq 12 ]; then
-              echo "SystemPulse 2.0.0 did not become installable from TestPyPI in time."
+              echo "SystemPulse $PACKAGE_VERSION did not become downloadable from TestPyPI."
               exit 1
             fi
 
@@ -121,29 +197,37 @@ jobs:
             sleep 10
           done
 
-      - name: Verify installed package
+      - name: Verify and install TestPyPI wheel
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.build.outputs.version }}
         run: |
+          built_wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
+          testpypi_wheel=$(find testpypi-download -maxdepth 1 -name '*.whl' -print -quit)
+          test "$(sha256sum "$built_wheel" | cut -d' ' -f1)" = \
+            "$(sha256sum "$testpypi_wheel" | cut -d' ' -f1)"
+
+          python -m pip install "$testpypi_wheel"
+          test "$(python -c 'import importlib.metadata; print(importlib.metadata.version("systempulse"))')" \
+            = "$PACKAGE_VERSION"
           systempulse --version
           systempulse --help
           python -m systempulse --version
           python -m pip check
 
-      - name: Verify Prometheus extra
+      - name: Verify Prometheus extra from the same wheel
+        shell: bash
         run: |
-          python -m pip install \
-            --index-url https://test.pypi.org/simple/ \
-            --extra-index-url https://pypi.org/simple/ \
-            "systempulse[prometheus]==2.0.0"
-
+          testpypi_wheel=$(find testpypi-download -maxdepth 1 -name '*.whl' -print -quit)
+          python -m pip install "${testpypi_wheel}[prometheus]"
           systempulse serve --help
           python -m pip check
 
   publish-pypi:
-    name: Publish to PyPI
+    name: Publish same distributions to PyPI
     needs:
       - build
       - verify-testpypi
-
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -155,11 +239,11 @@ jobs:
       id-token: write
 
     steps:
-      - name: Download distributions
+      - name: Download built distributions
         uses: actions/download-artifact@v4
         with:
           name: python-package-distributions
           path: dist/
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI with trusted publishing
         uses: pypa/gh-action-pypi-publish@release/v1

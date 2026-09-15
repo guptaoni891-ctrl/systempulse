@@ -6,19 +6,40 @@ for release planning.
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-09-15
+
 ### Added
 
-- Snapshot-level measured and explicitly estimated power telemetry, with optional Windows CPU
-  package readings from LibreHardwareMonitor and aggregate NVIDIA GPU power.
-- Shared trapezoidal energy integration for live Power Session and SQLite Power History views,
-  including time-weighted averages, peaks, energy, and telemetry-aware observed durations.
-- Power fields in new CSV exports and instantaneous snapshot-level Prometheus power gauges.
+- CPU package power where supported, aggregate NVIDIA GPU power, combined measured CPU + GPU
+  power, and explicitly estimated system and wall power.
+- Live Power Session and SQLite Power History statistics with time-weighted averages, peaks,
+  telemetry-aware observed durations, and trapezoidal Wh/kWh energy integration.
+- SQLite schema v2 persistence, CSV V2 fields, and instantaneous Prometheus gauges for power
+  telemetry.
+- `systempulse speedtest`, an on-demand global internet benchmark using Cloudflare edge
+  infrastructure for download and upload Mbps, median unloaded HTTP latency, jitter, and optional
+  edge colo metadata.
 
 ### Changed
 
 - Advanced SQLite history to schema version 2 with an automatic in-place migration that preserves
   existing schema-v1 snapshots, GPUs, and alert events.
 - Preserved exact legacy V1 CSV append compatibility while rejecting unknown headers.
+- Kept `systempulse network --speed` as local current-interface throughput, distinct from the
+  active internet benchmark.
+- Replaced the geolocation-dependent `speedtest-cli` backend with a persistent HTTP/2-capable HTTPX
+  client routed by Cloudflare's global anycast edge.
+
+### Fixed
+
+- Removed geographic server selection that could benchmark against a distant country when a
+  third-party client-geolocation result was incorrect.
+- Corrected Cloudflare unloaded latency to measure response-header arrival, drain responses for
+  connection reuse, exclude the warm-up, and subtract valid edge processing time.
+- Aligned Cloudflare bandwidth measurement with repeated, adaptively stopped size sets and P90
+  reduction over only the final stable set, avoiding distortion from tiny ramp-up transfers.
+- Kept unavailable optional power telemetry, Cloudflare edge metadata, and unsupported sensors
+  non-fatal, without inventing zero values or inferred locations.
 
 ## [2.0.0] - 2026-08-28
 
