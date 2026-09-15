@@ -96,7 +96,13 @@ jobs:
           systempulse --help
           systempulse --version
           systempulse snapshot
+          systempulse network --help
+          systempulse speedtest --help
+          systempulse history --help
+          systempulse save --help
+          systempulse serve --help
           python -m systempulse --version
+          python -m pip check
           if output=$(systempulse serve 2>&1); then
             echo "Exporter unexpectedly started without its optional dependency"
             exit 1

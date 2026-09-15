@@ -25,7 +25,7 @@ python -m pip install -e ".[dev]"
 
 The development extra includes tests, coverage, Ruff, mypy, type stubs, pre-commit, packaging tools,
 and `prometheus-client` for exporter tests. Runtime dependencies remain limited to `platformdirs`,
-`psutil`, and Rich; Prometheus support is still optional for users.
+`psutil`, HTTPX with HTTP/2 support, and Rich; Prometheus support is still optional for users.
 
 ## Local checks
 
@@ -126,8 +126,9 @@ pip cache, job timeouts, and concurrency cancellation.
 - Use `tmp_path` for databases, configuration, CSV, and other filesystem state.
 - Do not read a developer's `SYSTEMPULSE_CONFIG` or local `config.json` unless that behavior is the
   subject of the test.
-- Mock hardware, clocks, subprocesses, and sleep calls; tests must not require a GPU, temperature
-  sensor, network access, administrator privileges, or real delays.
+- Mock hardware, HTTP sessions, clocks, subprocesses, and sleep calls; tests must not require a GPU,
+  temperature sensor, network access, administrator privileges, or real delays. Automated tests
+  must never contact Cloudflare or another live speed-test endpoint.
 - Add regression coverage before fixing a behavior bug.
 - Prefer public outcomes and stable boundaries over brittle assertions against large Rich renderings
   or private implementation sequences.

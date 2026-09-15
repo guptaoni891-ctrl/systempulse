@@ -2,7 +2,7 @@
 
 ## Supported code
 
-SystemPulse has not yet published its planned 2.0 release. Security fixes are considered on a
+SystemPulse has not yet published its planned 2.1.0 release. Security fixes are considered on a
 best-effort basis for the current development branch and, after releases begin, the latest released
 line. Older releases are not guaranteed to receive backports.
 
@@ -40,5 +40,7 @@ No dedicated security email address is currently advertised.
 - SystemPulse is an observability tool, not a sandbox or endpoint security product. It should not be
   run with elevated privileges unless the operator has a separate reason to do so.
 
-Core monitoring does not require internet access. The only network listener created by SystemPulse
+Core monitoring does not require internet access. The explicitly invoked `systempulse speedtest`
+command makes outbound HTTPS requests to Cloudflare and actively transfers test data; it does not
+submit results to a separate analytics endpoint. The only network listener created by SystemPulse
 is the explicitly started Prometheus exporter.
